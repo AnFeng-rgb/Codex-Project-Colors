@@ -23,6 +23,8 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
   const durable = Boolean(options.persistenceBinding && options.sessionToken);
   const inlineControls = options.product === 'color-labels.v1';
   let commandId = 0, pendingCommand = null, commandError = '', panel, launcher;
+  let quotaToggle, uiRevision=0, pendingUI=null, uiError=options.uiSettingsError??'';
+  const uiSettings={version:1,showQuota:options.uiSettings?.showQuota!==false};
   let projectSelect, projectGrid, projectReset, projectIcon, selectedProjectKey = null, lastActiveProjectKey = null, projectSignature = '';
   let wheel, wheelHandle, colorSample, colorDrag = null, colorPreview = null;
   let fixedPalette, customToggle, customRegion;
@@ -103,7 +105,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     .ccld-rail-button[data-state="off"]::after { content:"Ⅱ"; display:grid; place-items:center; width:11px; height:11px; font:700 8px/1 sans-serif; background:var(--color-text-secondary, #777); color:var(--color-surface-elevated-secondary, Canvas); }
     .ccld-rail-button[data-state="error"]::after, .ccld-rail-button[data-state="disconnected"]::after { content:"!"; display:grid; place-items:center; width:11px; height:11px; font:700 9px/1 sans-serif; background:#bb7400; color:white; }
     html.dark [${owner}], html[data-theme="dark"] [${owner}] { --ccld-active:#63d389; }
-    .ccld-panel { position:fixed; box-sizing:border-box; width:200px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); overflow-y:auto; overscroll-behavior:contain; z-index:80; padding:12px; border:1px solid var(--color-border, #8884); border-radius:16px; background:var(--color-surface-elevated-secondary, Canvas); color:var(--color-text-default, CanvasText); box-shadow:0 8px 30px #0002; font-size:13px; line-height:1.35; }
+    .ccld-panel { position:fixed; box-sizing:border-box; width:200px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; z-index:80; padding:12px; border:1px solid var(--color-border, #8884); border-radius:16px; background:var(--color-surface-elevated-secondary, Canvas); color:var(--color-text-default, CanvasText); box-shadow:0 8px 30px #0002; font-size:13px; line-height:1.35; }
     .ccld-panel[hidden] { display:none; }
     .ccld-panel [hidden] { display:none !important; }
     .ccld-panel-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -142,6 +144,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     html.dark .ccld-project-controls .ccld-swatch > span::after, html[data-theme="dark"] .ccld-project-controls .ccld-swatch > span::after { color:#151515; }
     .ccld-panel .ccld-power { position:relative; flex-shrink:0; width:34px; height:20px; padding:0; border:0; border-radius:999px; background:#8885; font-size:0; }
     .ccld-panel .ccld-power[aria-checked="true"] { background:var(--ccld-active, #258347); }
+    .ccld-quota-setting { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--color-border, #8884); font-size:12px; }
     .ccld-power::before { content:""; position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:white; box-shadow:0 1px 3px #0002; }
     .ccld-power[aria-checked="true"]::before { transform:translateX(14px); }
     .ccld-panel button:disabled { cursor:default; }
@@ -155,9 +158,9 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     .ccld-wheel-info { display:flex; align-items:center; justify-content:center; gap:12px; }
     .ccld-wheel-divider { width:1px; height:10px; background:var(--color-border, #8884); }
     .ccld-color-sample { width:16px; height:16px; border:1px solid #8883; border-radius:50%; background:rgb(var(--ccld-rgb, 150, 150, 150)); }
-    .ccld-fixed-palette { display:grid; grid-template-columns:repeat(6,26px); justify-content:center; gap:3px; }
-    .ccld-panel .ccld-fixed-swatch { display:grid; place-items:center; box-sizing:border-box; width:26px; height:26px; padding:1px; border:1.5px solid transparent; border-radius:50%; background:transparent; }
-    .ccld-fixed-swatch > span { position:relative; width:20px; height:20px; border-radius:50%; background:rgb(var(--ccld-rgb)); }
+    .ccld-fixed-palette { display:grid; grid-template-columns:repeat(6,minmax(0,26px)); justify-content:center; width:100%; gap:3px; }
+    .ccld-panel .ccld-fixed-swatch { display:grid; place-items:center; box-sizing:border-box; width:100%; max-width:26px; height:auto; aspect-ratio:1; padding:1px; border:1.5px solid transparent; border-radius:50%; background:transparent; }
+    .ccld-fixed-swatch > span { position:relative; width:100%; max-width:20px; height:auto; aspect-ratio:1; border-radius:50%; background:rgb(var(--ccld-rgb)); }
     .ccld-fixed-swatch[aria-pressed="true"] { border-color:rgb(var(--ccld-rgb)); }
     .ccld-fixed-swatch[aria-pressed="true"] > span::after { content:"✓"; position:absolute; inset:0; display:grid; place-items:center; font:600 11px/1 sans-serif; color:white; }
     html.dark .ccld-fixed-swatch > span::after, html[data-theme="dark"] .ccld-fixed-swatch > span::after { color:#151515; }
@@ -292,7 +295,11 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     customRegion.append(wheelWrap); projectGrid.append(fixedPalette, colorTools, customRegion);
     projectControls.append(projectLabel, picker, projectGrid);
     decorateAction(randomize, '<rect x="2" y="2" width="12" height="12" rx="3"/><circle cx="5" cy="5" r=".6"/><circle cx="11" cy="5" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="5" cy="11" r=".6"/><circle cx="11" cy="11" r=".6"/>');
-    controls.append(randomize, randomFeedback, note, failure); panel.append(header, projectControls, controls); document.body.append(panel);
+    controls.append(randomize, randomFeedback);
+    const quotaSetting=document.createElement('div');quotaSetting.className='ccld-quota-setting';
+    const quotaLabel=document.createElement('span');quotaLabel.id='ccld-quota-setting-label';quotaLabel.textContent='显示账号额度';
+    quotaToggle=button('',()=>setQuotaVisible(!uiSettings.showQuota));quotaToggle.className='ccld-action ccld-power';quotaToggle.setAttribute('role','switch');quotaToggle.setAttribute('aria-labelledby',quotaLabel.id);quotaToggle.setAttribute('data-ccld-action','show-quota');
+    quotaSetting.append(quotaLabel,quotaToggle);controls.append(quotaSetting,note,failure);panel.append(header, projectControls, controls);document.body.append(panel);
     document.addEventListener('pointerdown', event => {
       if (!picker.contains(event.target)) closeProjectList(false);
       if (!panel.hidden && !panel.contains(event.target) && !widget.contains(event.target)) closePanel(false);
@@ -315,7 +322,9 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     if (!inlineControls) return;
     const anchor = adapter.controlAnchor?.();
     if (!anchor) { widget.remove(); closePanel(false); return; }
-    if (widget.parentElement !== anchor.rail || widget.nextElementSibling !== anchor.footer) anchor.rail.insertBefore(widget, anchor.footer);
+    const card = window.__codexProjectQuota?.controlContainer?.(anchor);
+    const parent = card ?? anchor.rail, before = card ? null : anchor.footer;
+    if (widget.parentElement !== parent || widget.nextElementSibling !== before) parent.insertBefore(widget, before);
     if (!panel.hidden) positionPanel();
   }
   function positionPanel() {
@@ -386,6 +395,18 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     const label = document.createElement('span'); label.textContent = element.textContent;
     element.className = 'ccld-action ccld-action-row'; element.replaceChildren(svg(paths), label);
   }
+  function setQuotaVisible(show){
+    if(typeof show!=='boolean'||!connected||pendingUI||options.uiSettingsError)return false;
+    uiSettings.showQuota=show;uiError='';window.__codexProjectQuota?.setVisible(show);
+    if(options.uiPersistenceBinding&&options.sessionToken){
+      const revision=++uiRevision;
+      const timer=window.setTimeout(()=>{if(pendingUI?.revision!==revision)return;pendingUI=null;uiError='显示设置保存未确认，请重试';updateText();},8000);
+      pendingUI={revision,timer};
+      try{window[options.uiPersistenceBinding](JSON.stringify({token:options.sessionToken,revision,settings:{...uiSettings}}));}
+      catch{clearTimeout(timer);pendingUI=null;uiError='显示设置保存接口不可用';}
+    }
+    updateText();return true;
+  }
   function updateText() {
     const message = !connected ? '未连接' : !current.ready ? '当前界面需要适配' : !storageHealthy ? '配色记录需要处理' : config.paused ? (inlineControls ? '上色已停止' : '上色已暂停') : (inlineControls ? '上色已开启' : '已连接');
     const text = inlineControls ? message : `项目颜色 · ${message}`;
@@ -394,7 +415,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     if (toggle.textContent !== toggleText) toggle.textContent = toggleText;
     const details = current.partial ? '部分项目暂无法识别。' : inlineControls ? '' : '本地项目分组生效。暂停保留设置；停止移除界面，调试端口仍开启。';
     if (note.textContent !== details) note.textContent = details;
-    const problem = error || persistenceError || commandError;
+    const problem = error || persistenceError || commandError || uiError;
     if (failure.textContent !== problem) failure.textContent = problem;
     failure.hidden = !problem;
     if (inlineControls) {
@@ -406,6 +427,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       note.hidden = !current.partial && !pendingSave;
     }
     toggle.disabled = !connected || !storageHealthy;
+    if(quotaToggle){quotaToggle.setAttribute('aria-checked',String(uiSettings.showQuota));quotaToggle.disabled=!connected||!!pendingUI||!!options.uiSettingsError;quotaToggle.title=pendingUI?'正在保存…':uiSettings.showQuota?'隐藏账号额度':'显示账号额度';}
     randomize.disabled = !connected || !storageHealthy || !current.ready || Boolean(pendingSave);
     randomFeedback.hidden = !randomUndo;
     undo.disabled = !randomUndo || !connected || !storageHealthy || Boolean(pendingSave) || Boolean(colorDrag);
@@ -622,6 +644,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     clearTimeout(pendingSave?.timer); pendingSave = null;
     clearTimeout(undoTimer); undoTimer = null; randomUndo = null;
     clearTimeout(pendingCommand?.timer); pendingCommand = null;
+    clearTimeout(pendingUI?.timer);pendingUI=null;
     for (const events of menuControllers.values()) events.abort();
     menuControllers.clear();
     for (const element of ownedNodes) clearMark(element);
@@ -632,9 +655,14 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     if (window[globalKey] === api) delete window[globalKey];
   }
   const api = {
-    refresh, pause, resume, destroy, setColor, randomizeColors, undoRandomize, clearColors, stopRequested: false,
+    refresh, pause, resume, destroy, setColor, randomizeColors, undoRandomize, clearColors, setQuotaVisible, stopRequested: false,
     product: options.product ?? 'demo',
     getPreferences() { return preferences.validate(config); },
+    getUISettings(){return{...uiSettings};},
+    uiSettingsAck(token,value,ok,message=''){
+      if(token!==options.sessionToken||pendingUI?.revision!==value)return false;
+      clearTimeout(pendingUI.timer);pendingUI=null;uiError=ok?'':`显示设置保存失败：${message}`;updateText();return true;
+    },
     commandAck(token, id, ok, message = '') {
       if (token !== options.sessionToken || pendingCommand?.id !== id) return false;
       clearTimeout(pendingCommand.timer); pendingCommand = null;
@@ -651,9 +679,10 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       while (pendingSave && !destroyed && Date.now() < deadline) await new Promise(resolve => window.setTimeout(resolve, 50));
       return !pendingSave && !persistenceError && !error;
     },
+    async flushUISettings(){const deadline=Date.now()+8500;while(pendingUI&&!destroyed&&Date.now()<deadline)await new Promise(resolve=>window.setTimeout(resolve,50));return !pendingUI&&!uiError;},
     heartbeat() { heartbeat = Date.now(); if (!connected) { connected = true; refresh(); } else mountControls(); return this.status(); },
     status() { return { version: 1, connected, ready: current.ready, partial: current.partial, paused: config.paused, error: error || persistenceError, saving: Boolean(pendingSave), product: this.product,
-      controlReady: !inlineControls || widget.isConnected,
+      controlReady: !inlineControls || widget.isConnected, showQuota:uiSettings.showQuota, uiError,
       projectCount: current.projects.length, coloredCount: ownedNodes.size, refreshCount, destroyed }; },
   };
   window[globalKey] = api; refresh(); return api.status();

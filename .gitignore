@@ -17,3 +17,7 @@
 /verification/release/startup-probe
 /verification/release/native-recovery-test
 /verification/release/capture-window
+# Generated official CLI schema and private live quota acceptance readings
+/verification/quota-schema/
+/verification/quota/*.json
+/verification/quota/*.png

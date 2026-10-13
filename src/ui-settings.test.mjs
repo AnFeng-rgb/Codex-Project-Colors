@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {UISettingsStore,parseUISettingsRequest} from './ui-settings.mjs';
+test('额度默认显示，独立持久保存且不改项目配色',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'color-ui-'));try{const store=new UISettingsStore(dir);await fs.writeFile(path.join(dir,'preferences.json'),'private colors');assert.equal((await store.read()).showQuota,true);await store.write({version:1,showQuota:false});assert.equal((await new UISettingsStore(dir).read()).showQuota,false);assert.equal(await fs.readFile(path.join(dir,'preferences.json'),'utf8'),'private colors');await store.write({version:1,showQuota:true});assert.equal((await store.read()).showQuota,true);}finally{await fs.rm(dir,{recursive:true});}});
+test('拒绝损坏设置和未知字段，不覆盖来源不明文件',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'color-ui-'));try{const store=new UISettingsStore(dir);await fs.writeFile(store.file,'{"version":2,"showQuota":false}');await assert.rejects(store.write({version:1,showQuota:true}),/无法读取/);assert.equal(await fs.readFile(store.file,'utf8'),'{"version":2,"showQuota":false}');assert.throws(()=>store.write({version:1,showQuota:true,path:'/tmp/foo'}),/格式无效/);}finally{await fs.rm(dir,{recursive:true});}});
+test('显示设置桥拒绝重放、过期连接、非布尔值、其他操作和任意路径',()=>{const request={token:'current',revision:2,settings:{version:1,showQuota:false}},raw=JSON.stringify(request);assert.ok(parseUISettingsRequest(raw,'current',1));assert.equal(parseUISettingsRequest(raw,'old',1),null);assert.equal(parseUISettingsRequest(raw,'current',2),null);for(const extra of [{settings:{version:1,showQuota:'false'}},{action:'execute'},{path:'/tmp/else'},{revision:1.5}])assert.equal(parseUISettingsRequest(JSON.stringify({...request,...extra}),'current',1),null);});

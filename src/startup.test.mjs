@@ -21,3 +21,9 @@ test('退出被拒绝后不强制结束或重新打开',async()=>{const f=fixtur
 test('退出过程中出现输入时取消重开',async()=>{const f=fixture();await f.controller.tick();f.state.apps=[f.app];f.adapter.quit=async()=>{f.state.apps=[];f.state.inputStamp='changed';return{accepted:true};};await f.controller.tick();assert.equal(f.counts().launches,0);assert.equal(f.events.at(-1).event,'canceled-by-input');});
 test('冷却记录和持久化失败均阻止重复退出',async()=>{const f=fixture();await f.controller.tick();f.state.apps=[f.app];f.controller.lastAttemptAt=9999;await f.controller.tick();assert.equal(f.counts().quits,0);const g=fixture();await g.controller.tick();g.state.apps=[g.app];g.adapter.record=async event=>{if(event==='attempt')throw Error('disk');};await g.controller.tick();assert.equal(g.counts().quits,0);});
 test('停用观察助手后不执行退出和启动',async()=>{const f=fixture();await f.controller.tick();f.state.apps=[f.app];f.controller.stop();await f.controller.tick();assert.deepEqual(f.counts(),{quits:0,launches:0});});
+
+test('首个观察事件晚到时，保留助手启动之后的新应用候选',async()=>{const f=fixture({existing:true});f.app.launchedAt=10001;f.advance(20);await f.controller.tick();assert.equal(f.counts().launches,1);});
+test('开机恢复先于登录助手：未操作的前台新窗口仍自动接入',async()=>{const f=fixture({existing:true});f.state.bootedAt=1000;f.app.launchedAt=1500;f.state.inputIdleMs=10000;await f.controller.tick();assert.equal(f.counts().launches,1);});
+for(const [name,mutate] of [
+ ['已操作',f=>f.state.inputIdleMs=100],['超过30秒',f=>f.app.launchedAt=1000],['超过开机2分钟',f=>f.state.bootedAt=1],['未知开机时间',f=>delete f.state.bootedAt],['后台',f=>f.state.frontmostPid=50],['多实例',f=>f.state.apps.push({...f.app,key:'second',pid:201})]
+])test(`登录先后竞态：${name}的现存窗口保持`,async()=>{const f=fixture({existing:true});f.advance(31000);f.state.bootedAt=1000;f.app.launchedAt=20000;f.state.inputIdleMs=50000;if(name==='超过开机2分钟')f.advance(120000);mutate(f);await f.controller.tick();assert.equal(f.counts().quits,0);});

@@ -53,6 +53,12 @@ static NSDictionary *argumentsState(pid_t pid) {
 static NSString *identity(NSRunningApplication *a) {
     return [NSString stringWithFormat:@"%d:%.0f", a.processIdentifier, a.launchDate.timeIntervalSince1970*1000];
 }
+static double bootedAtMs(void) {
+    struct timeval boot; size_t size=sizeof(boot);
+    int mib[]={CTL_KERN,KERN_BOOTTIME};
+    if (sysctl(mib,2,&boot,&size,NULL,0)) return 0;
+    return boot.tv_sec*1000.0+boot.tv_usec/1000.0;
+}
 static NSDictionary *snapshot(NSString *path) {
     NSMutableArray *apps = [NSMutableArray array];
     NSWorkspace *w = NSWorkspace.sharedWorkspace;
@@ -61,7 +67,7 @@ static NSDictionary *snapshot(NSString *path) {
         NSDictionary *args = argumentsState(a.processIdentifier);
         [apps addObject:@{@"pid":@(a.processIdentifier), @"key":identity(a), @"launchedAt":@(a.launchDate.timeIntervalSince1970*1000), @"finishedLaunching":@(a.finishedLaunching), @"argumentsKnown":args[@"known"], @"debugPort":args[@"port"] ?: NSNull.null}];
     }
-    return @{@"apps":apps, @"frontmostPid":@(w.frontmostApplication.processIdentifier), @"inputStamp":inputStamp(), @"inputIdleMs":@(inputIdleMs())};
+    return @{@"apps":apps, @"frontmostPid":@(w.frontmostApplication.processIdentifier), @"inputStamp":inputStamp(), @"inputIdleMs":@(inputIdleMs()), @"bootedAt":@(bootedAtMs())};
 }
 static void output(id object) {
     NSData *d = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];
@@ -95,12 +101,14 @@ int main(int argc, const char *argv[]) { @autoreleasepool {
         emit(YES);
         [NSRunLoop.currentRunLoop run]; return 0;
     }
-    if ([action isEqualToString:@"quit"] && argc==6) {
+    if ([action isEqualToString:@"quit"] && (argc==6 || argc==7)) {
         NSRunningApplication *a=[NSRunningApplication runningApplicationWithProcessIdentifier:atoi(argv[3])];
         double age = a.launchDate ? (NSDate.date.timeIntervalSince1970-a.launchDate.timeIntervalSince1970)*1000 : INFINITY;
         NSDictionary *args = a ? argumentsState(a.processIdentifier) : @{};
+        double boot=bootedAtMs(), now=NSDate.date.timeIntervalSince1970*1000;
+        BOOL bootRecovery=argc==7 && [@(argv[6]) isEqualToString:@"boot"] && boot>0 && now>=boot && now-boot<=120000 && a.launchDate.timeIntervalSince1970*1000>=boot;
         // Recheck all guards at the native action boundary. No forceTerminate, kill or app activation.
-        BOOL safe = matches(a,path) && a.finishedLaunching && [identity(a) isEqualToString:@(argv[4])] && age>=0 && age<=8000 && inputIdleMs()>=age && [inputStamp() isEqualToString:@(argv[5])] && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==a.processIdentifier && [args[@"known"] boolValue] && args[@"port"]==NSNull.null;
+        BOOL safe = matches(a,path) && a.finishedLaunching && [identity(a) isEqualToString:@(argv[4])] && age>=0 && age<=(bootRecovery?30000:8000) && inputIdleMs()>=age && [inputStamp() isEqualToString:@(argv[5])] && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==a.processIdentifier && [args[@"known"] boolValue] && args[@"port"]==NSNull.null;
         output(@{@"accepted":(safe && [a terminate]) ? @YES : @NO}); return 0;
     }
     if ([action isEqualToString:@"launch"] && argc==6) {

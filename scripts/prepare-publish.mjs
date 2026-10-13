@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { VERSION,RELEASE_TAG } from '../src/version.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -7,11 +8,11 @@ import { createHash } from 'node:crypto';
 
 const exec = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const version = '0.2.0';
-const output = path.join(root, 'publishing/packages', `v${version}-${Date.now()}`);
+const version = VERSION;
+const output = path.join(root, 'publishing/packages', `${RELEASE_TAG}-${Date.now()}`);
 await fs.mkdir(output, { recursive: true });
-const sourceName = `CodexProjectColors-v${version}-source`;
-const previewName = `CodexProjectColors-v${version}-macos-arm64`;
+const sourceName = `CodexProjectColors-${RELEASE_TAG}-source`;
+const previewName = `CodexProjectColors-${RELEASE_TAG}-macos-arm64`;
 const source = path.join(output, sourceName), preview = path.join(output, previewName);
 const copy = async (from, to) => { await fs.mkdir(path.dirname(to), { recursive: true }); await fs.copyFile(from, to); };
 const template = name => path.join(root, 'publishing/templates', name);
@@ -29,9 +30,11 @@ for (const file of ['src/macos/Manager.m', 'src/macos/StartupBridge.m', 'src/mac
 for (const file of ['sidebar-browser.mjs', 'wheel-browser.mjs', 'randomize-browser.mjs', 'first-use-browser.mjs']) await copy(path.join(root, 'verification/release', file), path.join(source, 'verification/release', file));
 await fs.writeFile(path.join(source, 'package.json'), JSON.stringify({
   name: 'codex-project-colors', version, private: true, type: 'module', license: 'MIT', engines: { node: '>=24' },
-  scripts: { test: 'node --test src/*.test.mjs demo/core/*.test.mjs', 'build:macos': 'node src/macos/build.mjs' },
+  scripts: { test: 'node --test src/*.test.mjs demo/core/*.test.mjs', 'test:quota-ui':'node verification/quota/browser.mjs', 'build:macos': 'node src/macos/build.mjs' },
 }, null, 2) + '\n');
-await fs.writeFile(path.join(source, '.gitignore'), '.DS_Store\n/data/\n/release/\n/demo/runtime/\n/node_modules/\n/verification/release/*.json\n');
+await copy(path.join(root,'.gitignore'),path.join(source,'.gitignore'));
+for(const file of ['browser.mjs','README.md'])await copy(path.join(root,'verification/quota',file),path.join(source,'verification/quota',file));
+await copy(path.join(root,'CHANGELOG.md'),path.join(source,'CHANGELOG.md'));
 
 const app = path.join(root, 'release/颜色标签.app');
 const { stdout: architecture } = await exec('/usr/bin/lipo', ['-archs', path.join(app, 'Contents/MacOS/ColorLabels')]);
@@ -39,9 +42,9 @@ if (architecture.trim() !== 'arm64') throw new Error('此预览包名称只适�
 const expectedAppFiles = new Set([
   'Contents/Info.plist', 'Contents/MacOS/ColorLabels', 'Contents/_CodeSignature/CodeResources',
   'Contents/Resources/node', 'Contents/Resources/startup-bridge', 'Contents/Resources/NODE-LICENSE', 'Contents/Resources/LICENSE', 'Contents/Resources/STARTUP-LICENSE',
-  ...['agent.mjs', 'cli.mjs', 'settings.mjs', 'preferences-store.mjs', 'commands.mjs', 'browser-session.mjs', 'installation.mjs', 'first-use.mjs'].map(name => `Contents/Resources/tool/src/${name}`),
+  ...['agent.mjs', 'cli.mjs', 'settings.mjs', 'preferences-store.mjs', 'commands.mjs', 'browser-session.mjs', 'installation.mjs', 'first-use.mjs', 'quota.mjs', 'ui-settings.mjs', 'version.mjs'].map(name => `Contents/Resources/tool/src/${name}`),
   ...['controller.mjs', 'watch.mjs'].map(name => `Contents/Resources/tool/src/startup/${name}`),
-  ...['renderer.mjs', 'adapter.mjs', 'preferences.mjs', 'cdp.mjs', 'injector.mjs'].map(name => `Contents/Resources/tool/demo/core/${name}`),
+  ...['renderer.mjs', 'adapter.mjs', 'preferences.mjs', 'cdp.mjs', 'injector.mjs', 'quota-renderer.mjs'].map(name => `Contents/Resources/tool/demo/core/${name}`),
   'Contents/Resources/tool/demo/platforms/macos/launch.mjs',
 ]);
 async function files(directory, prefix = '') {
@@ -79,5 +82,5 @@ for (const name of [sourceName, previewName]) {
   checksums.push(`${createHash('sha256').update(data).digest('hex')}  ${file}`);
 }
 await fs.writeFile(path.join(output, 'SHA256SUMS.txt'), checksums.join('\n') + '\n');
-await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({ version, architecture: 'arm64', personalDataIncluded: false, manifests }, null, 2) + '\n');
+await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({ version, tag:RELEASE_TAG, sourceName, previewName, architecture: 'arm64', personalDataIncluded: false, manifests }, null, 2) + '\n');
 console.log(output);

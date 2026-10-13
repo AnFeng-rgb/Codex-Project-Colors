@@ -1,0 +1,78 @@
+import fs from 'node:fs/promises';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import {createAdapter} from '../../demo/core/adapter.mjs';
+import {createPreferences} from '../../demo/core/preferences.mjs';
+import {installRenderer} from '../../demo/core/renderer.mjs';
+import {installQuotaRenderer,quotaPresentation} from '../../demo/core/quota-renderer.mjs';
+const require=createRequire(import.meta.url);
+const {chromium}=require(process.env.COLOR_LABELS_PLAYWRIGHT??'playwright');
+const browser=await chromium.launch({executablePath:process.env.COLOR_LABELS_CHROME??'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--no-first-run']});
+const page=await browser.newPage({viewport:{width:960,height:760}}),checks=[];
+const check=(name,passed)=>{checks.push({name,passed:!!passed});if(!passed)throw Error(name);};
+// Synthetic display fixtures by default: no login, account file or API call.
+const now=Date.now(),day=86400;
+const fixture={windows:[{kind:'five-hour',minutes:300,label:'5小时',remaining:68,resetsAt:now/1000+18000},{kind:'weekly',minutes:10080,label:'本周',remaining:24,resetsAt:now/1000+7*day}],cards:{count:3,details:[{expiresAt:now/1000+10*day},{expiresAt:now/1000+20*day},{expiresAt:now/1000+30*day}]},updatedAt:now,stale:false,error:''};
+const captured=process.env.COLOR_LABELS_QUOTA_FIXTURE?JSON.parse(await fs.readFile(process.env.COLOR_LABELS_QUOTA_FIXTURE,'utf8')):fixture;
+const live={...captured,updatedAt:now};
+try{
+ await page.setContent('<html class="light"><head><style>body{margin:0;font:14px system-ui;background:#fff;color:#222}html.dark body{background:#252525;color:#eee}html.light{--color-surface-elevated-secondary:#fff;--color-text-default:#222;--color-text-secondary:#777;--color-border:#e4e4e4}html.dark{--color-surface-elevated-secondary:#2b2b2b;--color-text-default:#eee;--color-text-secondary:#aaa;--color-border:#444}nav{display:flex;align-items:center;flex-direction:column;width:48px;height:760px;background:#8881}nav .spacer{flex:1}.sidebar{position:absolute;left:64px;top:30px;width:240px}button{font:inherit}</style></head><body><nav data-app-navigation-rail="true"><div>⌂</div><div class="spacer"></div><div class="footer"><button aria-haspopup="menu" aria-label="打开个人资料菜单">我</button></div></nav><div class="sidebar" data-sidebar-project-container-id="project:a" data-sidebar-project-kind="local"><div data-app-action-sidebar-project-row data-app-action-sidebar-project-id="a" data-app-action-sidebar-project-label="颜色标签"><span class="icon-leading-slot"><span data-sidebar-project-drop-zone="project-icon"><svg width="20" height="20"><path d="M2 4h6l2 3h8v10H2z" stroke="currentColor" fill="none"/></svg></span></span>颜色标签<button aria-haspopup="menu" id="a-menu"></button></div><div data-app-action-sidebar-thread-row data-app-action-sidebar-thread-id="a1" data-app-action-sidebar-thread-kind="local" data-app-action-sidebar-thread-host-id="local" data-app-action-sidebar-thread-pinned="false" data-app-action-sidebar-thread-selected="true"><span data-thread-title-trigger="true"><span data-thread-title="true">示例对话</span></span></div></div></body></html>');
+ await page.evaluate(({adapter,preferences,colors,quota,present,live})=>{
+  const map=new Map();Object.defineProperty(window,'localStorage',{value:{getItem:k=>map.get(k)??null,setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)}});
+  window.uiRequests=[];window.fixtureUIBinding=raw=>{const p=JSON.parse(raw);window.uiRequests.push(p);window.__codexColorLabelsDemo.uiSettingsAck(p.token,p.revision,true);};
+  const a=eval(`(${adapter})`);eval(`(${colors})`)(a,eval(`(${preferences})`),{product:'color-labels.v1',sessionToken:'quota-test',uiPersistenceBinding:'fixtureUIBinding',initialPreferences:{version:1,paused:false,projects:{'local:a':'green'}}});eval(`(${quota})`)(a,eval(`(${present})`),live);
+ },{adapter:createAdapter.toString(),preferences:createPreferences.toString(),colors:installRenderer.toString(),quota:installQuotaRenderer.toString(),present:quotaPresentation.toString(),live});
+ check('额度和配色共用一张卡片，额度在上方',await page.evaluate(()=>document.querySelectorAll('.cclq-meter').length===2&&document.querySelector('#cclq-slot').parentElement.id==='cclq-card'&&document.querySelector('.ccld-rail-slot').parentElement.id==='cclq-card'));
+ check('两个环均36px，无渐变底纹',await page.evaluate(()=>[...document.querySelectorAll('.cclq-ring')].every(n=>n.getBoundingClientRect().width===36)&&!document.querySelector('#cclq-trigger linearGradient')));
+ check('卡片内恰好两个独立按钮',await page.locator('#cclq-card button').count()===2);
+ check('共用卡片不含分隔横线',await page.locator('#cclq-card .cclq-divider').count()===0);
+ await page.evaluate(()=>{for(let i=0;i<20;i++){window.__codexColorLabelsDemo.heartbeat();window.__codexProjectQuota.heartbeat();}});check('重复心跳保留同卡片顺序',await page.evaluate(()=>document.querySelector('#cclq-card').lastElementChild.classList.contains('ccld-rail-slot')&&document.querySelectorAll('#cclq-card').length===1));
+ await page.click('#cclq-trigger');check('正常读数不显示常驻状态提示',await page.locator('.cclq-notice').count()===0);check('详情使用受控卡券张数和到期列表',await page.evaluate(()=>!document.querySelector('#cclq-panel').hidden&&document.querySelectorAll('.cclq-card').length===3&&document.querySelector('#cclq-panel').textContent.includes('剩余 3 张')));
+ for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.className=theme,theme);await page.screenshot({path:fileURLToPath(new URL(`./${theme}-dual.png`,import.meta.url))});check(`${theme} 弹窗200px且完整位于视窗`,await page.evaluate(()=>{const r=document.querySelector('#cclq-panel').getBoundingClientRect();return r.width===200&&r.left>=8&&r.bottom<=innerHeight-8;}));}
+ check('深色模式额度文字使用明亮可读颜色',await page.evaluate(()=>getComputedStyle(document.querySelector('.cclq-percent')).color==='rgb(102, 212, 145)'));
+ await page.evaluate(live=>window.__codexProjectQuota.update({...live,updatedAt:Date.now()}),live);check('面板刷新保持键盘焦点',await page.evaluate(()=>document.activeElement.getAttribute('aria-label')==='关闭账号额度'));
+ await page.click('.ccld-rail-button');check('配色按钮独立打开配色并收起额度',await page.evaluate(()=>!document.querySelector('#ccld-panel').hidden&&document.querySelector('#cclq-panel').hidden));
+ await page.click('#cclq-trigger');check('额度按钮独立打开额度并收起配色',await page.evaluate(()=>document.querySelector('#ccld-panel').hidden&&!document.querySelector('#cclq-panel').hidden));
+ await page.keyboard.press('Escape');check('Escape关闭并返回焦点',await page.evaluate(()=>document.querySelector('#cclq-panel').hidden&&document.activeElement.id==='cclq-trigger'));
+ await page.evaluate(live=>window.__codexProjectQuota.update({...live,windows:live.windows.filter(w=>w.kind==='weekly')}),live);check('仅周额度自动收窄为一个环',await page.locator('.cclq-meter').count()===1);
+ await page.click('#cclq-trigger');await page.screenshot({path:fileURLToPath(new URL('./dark-weekly.png',import.meta.url))});await page.click('body',{position:{x:500,y:30}});check('面板外点击关闭',await page.locator('#cclq-panel').isHidden());
+ await page.evaluate(live=>window.__codexProjectQuota.update({...live,stale:true,error:'更新失败'}),live);check('读取失败保留读数并标记过期',await page.evaluate(()=>document.querySelector('#cclq-trigger').dataset.stale==='true'&&document.querySelector('#cclq-trigger').title==='更新失败'));
+ await page.evaluate(live=>window.__codexProjectQuota.update({...live,cards:{count:0,details:[]}}),live);await page.click('#cclq-trigger');check('零张卡正确空状态',await page.locator('#cclq-panel').innerText().then(t=>t.includes('暂无可用卡')));
+ await page.evaluate(live=>window.__codexProjectQuota.update({...live,cards:{count:5,details:null}}),live);check('只知卡数不虚构到期日',await page.locator('#cclq-panel').innerText().then(t=>t.includes('剩余 5 张')&&t.includes('到期明细未提供')));
+ await page.click('.ccld-rail-button');
+ check('配色面板仍为200px且额度开关位于随机按钮下方',await page.evaluate(()=>{const panel=document.querySelector('#ccld-panel'),random=panel.querySelector('[data-ccld-action="randomize"]'),setting=panel.querySelector('.ccld-quota-setting');return panel.getBoundingClientRect().width===200&&setting.getBoundingClientRect().top>random.getBoundingClientRect().bottom;}));
+ const colorsBefore=await page.evaluate(()=>JSON.stringify(window.__codexColorLabelsDemo.getPreferences()));
+ await page.click('[data-ccld-action="show-quota"]');
+ check('隐藏额度后配色入口仍可用且设置单独保存',await page.evaluate(()=>document.querySelector('#cclq-slot').hidden&&document.querySelector('.ccld-rail-button').isConnected&&window.uiRequests.at(-1).settings.showQuota===false));
+ check('额度开关不改变项目配色或顶部开关',await page.evaluate(before=>JSON.stringify(window.__codexColorLabelsDemo.getPreferences())===before&&document.querySelector('[data-ccld-action="toggle"]').getAttribute('aria-checked')==='true',colorsBefore));
+ await page.click('[data-ccld-action="show-quota"]');check('从同一配色面板可重新打开额度',await page.evaluate(()=>!document.querySelector('#cclq-slot').hidden&&window.uiRequests.at(-1).settings.showQuota===true));
+ await page.click('[data-ccld-action="toggle"]');check('停止项目上色不隐藏账号额度',await page.evaluate(()=>window.__codexColorLabelsDemo.getPreferences().paused&&!document.querySelector('#cclq-slot').hidden));await page.click('[data-ccld-action="toggle"]');
+ await page.keyboard.press('Escape');
+ await page.evaluate(live=>{const now=Date.now()/1000;window.__codexProjectQuota.update({...live,updatedAt:Date.now(),cards:{count:3,details:[{expiresAt:now+6*86400},{expiresAt:now+2*86400},{expiresAt:null,noExpiry:true}]}});},live);
+ check('收起状态显示独立红色临期徽标并有数量提示',await page.evaluate(()=>!!document.querySelector('.cclq-alert')&&document.querySelector('#cclq-trigger').title.includes('1张充值卡将在3天内到期')&&getComputedStyle(document.querySelector('.cclq-ring .cclq-value')).stroke!=='rgb(200, 48, 66)'));
+ await page.screenshot({path:fileURLToPath(new URL('./dark-urgent-collapsed.png',import.meta.url))});
+ await page.click('#cclq-trigger');
+ check('临期卡在首行且只显示一次即将到期，不增加标签',await page.evaluate(()=>{const rows=[...document.querySelectorAll('.cclq-card')];return rows[0].dataset.urgent==='true'&&rows[0].textContent.endsWith('即将到期')&&!rows[0].textContent.includes('到期即将')&&document.querySelectorAll('.cclq-expiry-state').length===3;}));
+ check('临期日期与状态为红色，展开时隐藏徽标',await page.evaluate(()=>getComputedStyle(document.querySelector('.cclq-card[data-urgent=true] .cclq-expiry')).color==='rgb(255, 137, 153)'&&getComputedStyle(document.querySelector('.cclq-alert')).display==='none'));
+ check('200px面板卡券单行且无横向滚动',await page.evaluate(()=>{const panel=document.querySelector('#cclq-panel');return panel.getBoundingClientRect().width===200&&panel.scrollWidth===panel.clientWidth&&[...document.querySelectorAll('.cclq-card')].every(row=>row.scrollWidth<=row.clientWidth&&getComputedStyle(row).whiteSpace==='nowrap');}));
+ await page.screenshot({path:fileURLToPath(new URL('./dark-urgent-detail.png',import.meta.url))});
+ for(const theme of ['light','dark']){await page.evaluate(theme=>document.documentElement.className=theme,theme);await page.screenshot({path:fileURLToPath(new URL(`./${theme}-urgent-detail.png`,import.meta.url))});}
+ await page.setViewportSize({width:190,height:320});
+ check('窄视窗面板收窄并滚动，不出现横向滚动',await page.evaluate(()=>{window.__codexProjectQuota.heartbeat();const panel=document.querySelector('#cclq-panel');return panel.getBoundingClientRect().width<=174&&panel.scrollWidth===panel.clientWidth&&panel.getBoundingClientRect().bottom<=innerHeight-8;}));
+ await page.keyboard.press('Escape');await page.click('.ccld-rail-button');check('配色面板在窄视窗中也没有横向滚动',await page.evaluate(()=>{const panel=document.querySelector('#ccld-panel');return panel.getBoundingClientRect().width<=174&&panel.scrollWidth===panel.clientWidth&&[...document.querySelectorAll('.ccld-fixed-swatch')].every(n=>n.getBoundingClientRect().right<=panel.getBoundingClientRect().right);}));
+ await page.setViewportSize({width:960,height:760});
+ await page.evaluate(()=>{window.normalUIBinding=window.fixtureUIBinding;window.fixtureUIBinding=raw=>window.uiRequests.push(JSON.parse(raw));window.__codexColorLabelsDemo.setQuotaVisible(false);});
+ check('显示设置未确认时阻止重复点击',await page.locator('[data-ccld-action="show-quota"]').isDisabled());
+ check('拒绝其他连接的显示设置回执',await page.evaluate(()=>{const p=window.uiRequests.at(-1);return window.__codexColorLabelsDemo.uiSettingsAck('old',p.revision,true)===false;}));
+ await page.evaluate(()=>{const p=window.uiRequests.at(-1);window.__codexColorLabelsDemo.uiSettingsAck(p.token,p.revision,false,'模拟磁盘写入失败');});
+ check('显示设置保存失败明确提示且不影响原配色',await page.evaluate(()=>window.__codexColorLabelsDemo.status().uiError.includes('模拟磁盘写入失败')&&!window.__codexColorLabelsDemo.getPreferences().paused));
+ await page.evaluate(()=>{window.fixtureUIBinding=window.normalUIBinding;window.__codexColorLabelsDemo.setQuotaVisible(true);});
+ check('显示设置重试确认后恢复',await page.evaluate(()=>window.__codexColorLabelsDemo.status().uiError===''&&document.querySelector('[data-ccld-action="show-quota"]').getAttribute('aria-checked')==='true'));
+ await page.keyboard.press('Escape');
+ await page.evaluate(live=>window.__codexProjectQuota.update({...live,updatedAt:Date.now(),cards:{count:1,details:[{expiresAt:Date.now()/1000+5*86400}]}}),live);check('没有临期卡时移除徽标',await page.locator('.cclq-alert').count()===0);
+ await page.evaluate(()=>window.__codexProjectQuota.update({windows:[],cards:{count:null,details:null},updatedAt:null,stale:true,error:'未登录'}));check('未登录不显示100%或假卡券',await page.locator('#cclq-trigger').innerText().then(t=>t.includes('—')&&!t.includes('100%')));
+ await page.evaluate(()=>{const old=document.querySelector('nav'),next=old.cloneNode(true);next.querySelector('#cclq-card').remove();old.replaceWith(next);window.__codexColorLabelsDemo.heartbeat();window.__codexProjectQuota.heartbeat();});check('侧边栏替换后重新挂载且不重复',await page.locator('#cclq-slot').count()===1&&await page.evaluate(()=>document.querySelector('#cclq-slot').isConnected));
+ await page.evaluate(()=>window.__codexProjectQuota.destroy());check('额度卸载清理且不影响原配色',await page.locator('[data-cclq-owner],#cclq-style').count()===0&&await page.locator('.ccld-rail-button').count()===1&&await page.evaluate(()=>document.querySelector('.ccld-rail-slot').parentElement.tagName==='NAV'&&!document.querySelector('#cclq-card')));
+ await page.evaluate(()=>window.__codexColorLabelsDemo.destroy());
+ await fs.writeFile(new URL('./browser.json',import.meta.url),JSON.stringify({passed:true,checks,scope:'独立浏览器测试，默认使用虚构数据与测试时钟，不读取用户账号'},null,2)+'\n');console.log(JSON.stringify({passed:true,checks,scope:'独立浏览器测试，默认使用虚构数据与测试时钟，不读取用户账号'}));
+}finally{await browser.close();}

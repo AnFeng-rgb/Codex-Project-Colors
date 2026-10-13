@@ -2,22 +2,35 @@
 // MIT; full notice: third-party/codex-usage-badge-LICENSE.
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 export class StartupController {
-  constructor(adapter, {now=Date.now, sleep=delay, lastAttemptAt=0, cooldownMs=120000}={}) {
-    Object.assign(this,{adapter,now,sleep,lastAttemptAt,cooldownMs});
+  constructor(adapter, {now=Date.now, sleep=delay, lastAttemptAt=0, cooldownMs=120000, observedAt=now()}={}) {
+    Object.assign(this,{adapter,now,sleep,lastAttemptAt,cooldownMs,observedAt});
     this.baselined=false; this.seen=new Set(); this.busy=false; this.stopped=false;
+    this.bootCandidates=new Set();
   }
   stop() { this.stopped=true; }
-  async tick() {
+  async tick(observedSnapshot) {
     if(this.busy||this.stopped)return;
     this.busy=true;
     this.pendingLaunch=false;
     try {
-      const snapshot=await this.adapter.snapshot();
+      const snapshot=observedSnapshot??await this.adapter.snapshot();
       if(!this.baselined) {
-        for(const app of snapshot.apps)this.seen.add(app.key);
+        // macOS may restore Codex before our login agent starts. Only a recent,
+        // untouched foreground launch during the first two minutes of this boot
+        // can be considered; ordinary existing work windows remain excluded.
+        const bootAge=this.now()-snapshot.bootedAt;
+        for(const app of snapshot.apps){
+          const age=this.now()-app.launchedAt;
+          const bootFresh=Number.isFinite(snapshot.bootedAt)&&bootAge>=0&&bootAge<=120000&&app.launchedAt>=snapshot.bootedAt&&age>=0&&age<=30000;
+          if(bootFresh)this.bootCandidates.add(app.key);
+          else if(app.launchedAt<this.observedAt)this.seen.add(app.key);
+        }
         this.baselined=true;
         await this.adapter.record('watching',{existingApps:snapshot.apps.length});
-        return;
+        if(snapshot.apps.every(app=>this.seen.has(app.key))) {
+          if(snapshot.apps.some(app=>app.debugPort===null))await this.adapter.record('waiting-for-fresh-launch',{reason:'已存在的工作窗口没有连接接口；保留窗口，等待下次正常打开'});
+          return;
+        }
       }
       const fresh=snapshot.apps.filter(app=>!this.seen.has(app.key));
       if(this.seen.size>256)this.seen=new Set(snapshot.apps.map(app=>app.key));
@@ -26,14 +39,16 @@ export class StartupController {
         return;
       }
       const app=fresh[0], age=this.now()-app.launchedAt;
+      const bootRecovery=this.bootCandidates.has(app.key)&&this.now()-snapshot.bootedAt<=120000;
+      const maxAge=bootRecovery?30000:8000;
       if(!app.argumentsKnown||app.debugPort!==null) { this.seen.add(app.key); return; }
       // Wait for the initial launch to finish; never interrupt a partially initialized app.
-      if((!app.finishedLaunching||snapshot.frontmostPid!==app.pid) && age>=0 && age<=8000 && snapshot.inputIdleMs>=age) {
+      if((!app.finishedLaunching||snapshot.frontmostPid!==app.pid) && age>=0 && age<=maxAge && snapshot.inputIdleMs>=age) {
         this.pendingLaunch=true; return;
       }
       // Remember even rejected candidates: do not revisit a running work window later.
       this.seen.add(app.key);
-      if(age<0||age>8000||snapshot.inputIdleMs<age||snapshot.frontmostPid!==app.pid) {
+      if(age<0||age>maxAge||!Number.isFinite(snapshot.inputIdleMs)||snapshot.inputIdleMs<age||snapshot.frontmostPid!==app.pid) {
         await this.adapter.record('skipped-active-or-background'); return;
       }
       if(this.lastAttemptAt && this.now()-this.lastAttemptAt<this.cooldownMs) {
@@ -45,7 +60,7 @@ export class StartupController {
       this.lastAttemptAt=this.now();
       await this.adapter.record('attempt',{lastAttemptAt:this.lastAttemptAt,processKey:app.key});
       if(this.stopped)return;
-      const quit=await this.adapter.quit(app,snapshot.inputStamp);
+      const quit=await this.adapter.quit(app,snapshot.inputStamp,bootRecovery);
       if(!quit.accepted) { await this.adapter.record('quit-refused'); return; }
       const deadline=this.now()+10000;
       let absent=null;

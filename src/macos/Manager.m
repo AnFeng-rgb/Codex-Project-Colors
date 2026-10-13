@@ -142,7 +142,7 @@
         self.detailLabel.stringValue=state[@"detail"]?:@"无法读取状态。"; return;
     }
     NSString *status=state[@"status"]?:@"未连接";
-    if(self.automatic&&!connected)status=@"自动配色已启用";
+    if(self.automatic&&!connected&&![status isEqualToString:@"等待下次正常打开"])status=@"自动配色已启用";
     if(self.automatic&&!self.watcherRunning)status=@"启动助手等待恢复";
     if(renderer[@"error"]&&[renderer[@"error"] length])status=@"保存需要处理";
     else if(connected)status=self.paused?@"上色已暂停":([renderer[@"saving"] boolValue]?@"正在保存配色…":@"已连接");

@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {quotaPresentation} from './quota-renderer.mjs';
+const now=1791870000000,seconds=now/1000;
+const value=cards=>({windows:[{kind:'five-hour',remaining:68},{kind:'weekly',remaining:24}],cards:{count:cards.length,details:cards},updatedAt:now,stale:false});
+test('三天边界包含恰好三天，不包含已到期、无到期日和三天之外',()=>{const q=quotaPresentation(value([{expiresAt:seconds-1},{expiresAt:seconds},{expiresAt:seconds+1},{expiresAt:seconds+259200},{expiresAt:seconds+259201},{expiresAt:null,noExpiry:true}]),now);assert.equal(q.urgentCount,2);assert.ok(q.details.slice(0,2).every(c=>c.urgent));assert.equal(q.details.filter(c=>c.expired).length,2);});
+test('临期提醒随时间进入与结束，不依赖下一次网络更新',()=>{const data=value([{expiresAt:seconds+259201}]);assert.equal(quotaPresentation(data,now).urgentCount,0);assert.equal(quotaPresentation(data,now+1000).urgentCount,1);assert.equal(quotaPresentation({...data,updatedAt:now+259201000},now+259201000).urgentCount,0);});
+test('过期或断开的读数不发出假临期提醒',()=>{const data=value([{expiresAt:seconds+1000}]);assert.equal(quotaPresentation({...data,stale:true},now).urgentCount,0);assert.equal(quotaPresentation(data,now+180001).urgentCount,0);});
+test('未知张数、零张和未提供到期详情不会捏造临期数量',()=>{for(const cards of [{count:null,details:[{expiresAt:seconds+1}]},{count:0,details:[{expiresAt:seconds+1}]},{count:5,details:null}])assert.equal(quotaPresentation({...value([]),cards},now).urgentCount,0);});
+test('展示仅双额度或仅周额度，不显示其他周期或五小时占位',()=>{const data=value([]);assert.equal(quotaPresentation(data,now).windows.length,2);assert.deepEqual(quotaPresentation({...data,windows:[data.windows[1]]},now).windows.map(w=>w.kind),['weekly']);assert.equal(quotaPresentation({...data,windows:[data.windows[0],{kind:'other',remaining:90}]},now).windows.length,0);});
