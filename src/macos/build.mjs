@@ -1,0 +1,30 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const exec=promisify(execFile);
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
+const app=path.join(root,'release/颜色标签.app'),contents=path.join(app,'Contents');
+await fs.mkdir(path.join(contents,'MacOS'),{recursive:true});
+await fs.mkdir(path.join(contents,'Resources/tool/src'),{recursive:true});
+await fs.mkdir(path.join(contents,'Resources/tool/demo/platforms/macos'),{recursive:true});
+await fs.writeFile(path.join(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>ColorLabels</string><key>CFBundleIdentifier</key><string>local.codex-project-colors.manager</string><key>CFBundleName</key><string>Codex 项目配色</string><key>CFBundleDisplayName</key><string>Codex 项目配色</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>0.2.0</string><key>CFBundleVersion</key><string>2</string><key>NSHighResolutionCapable</key><true/><key>NSPrincipalClass</key><string>NSApplication</string></dict></plist>`);
+for(const file of ['agent.mjs','cli.mjs','settings.mjs','preferences-store.mjs','commands.mjs','browser-session.mjs','installation.mjs','first-use.mjs'])await fs.copyFile(path.join(root,'src',file),path.join(contents,'Resources/tool/src',file));
+await fs.cp(path.join(root,'src/startup'),path.join(contents,'Resources/tool/src/startup'),{recursive:true});
+const cache=path.join(root,`release/runtime-cache/node-v24.21.0-darwin-${process.arch==='arm64'?'arm64':'x64'}`);
+if(!await fs.access(path.join(cache,'bin/node')).then(()=>true).catch(()=>false))await exec(process.execPath,[path.join(root,'src/macos/fetch-runtime.mjs')]);
+await fs.copyFile(path.join(cache,'bin/node'),path.join(contents,'Resources/node'));await fs.chmod(path.join(contents,'Resources/node'),0o755);
+await fs.copyFile(path.join(cache,'LICENSE'),path.join(contents,'Resources/NODE-LICENSE'));
+await fs.copyFile(path.join(root,'LICENSE'),path.join(contents,'Resources/LICENSE'));
+await fs.copyFile(path.join(root,'third-party/codex-usage-badge-LICENSE'),path.join(contents,'Resources/STARTUP-LICENSE'));
+await fs.cp(path.join(root,'demo/core'),path.join(contents,'Resources/tool/demo/core'),{recursive:true,filter:source=>!source.endsWith('.test.mjs')});
+await fs.rm(path.join(contents,'Resources/tool/demo/core/core.test.mjs'),{force:true});
+await fs.copyFile(path.join(root,'demo/platforms/macos/launch.mjs'),path.join(contents,'Resources/tool/demo/platforms/macos/launch.mjs'));
+const compiled=await exec('/usr/bin/xcrun',['clang','-fobjc-arc','-framework','Cocoa','-framework','UniformTypeIdentifiers','-mmacosx-version-min=13.0',path.join(root,'src/macos/Manager.m'),'-o',path.join(contents,'MacOS/ColorLabels')]);
+await exec('/usr/bin/xcrun',['clang','-fobjc-arc','-framework','Cocoa','-framework','ApplicationServices','-mmacosx-version-min=13.0',path.join(root,'src/macos/StartupBridge.m'),'-o',path.join(contents,'Resources/startup-bridge')]);
+if(compiled.stderr)console.log(compiled.stderr);
+await exec('/usr/bin/codesign',['--force','--sign','-',app]);
+console.log(app);

@@ -1,0 +1,70 @@
+import fs from 'node:fs/promises';
+import { discover, Session } from '../../demo/core/cdp.mjs';
+import { createAdapter } from '../../demo/core/adapter.mjs';
+import { createPreferences } from '../../demo/core/preferences.mjs';
+import { installRenderer } from '../../demo/core/renderer.mjs';
+const session=new Session((await discover(39222,undefined,{preferredURL:'app://-/index.html'})).webSocketDebuggerUrl);
+await session.connect();
+try{
+  const run=async(adapter,preferences,install)=>{
+    const iframe=document.createElement('iframe');iframe.style.cssText='position:fixed;left:-10000px;width:800px;height:360px';document.body.append(iframe);
+    const win=iframe.contentWindow,doc=win.document,checks=[],requests=[],cache=new Map();
+    const check=(name,ok)=>{checks.push({name,passed:!!ok});if(!ok)throw Error(name);};
+    Object.defineProperty(win,'localStorage',{value:{getItem:key=>cache.get(key)??null,setItem:(key,value)=>cache.set(key,value),removeItem:key=>cache.delete(key)}});
+    win.saveFixture=raw=>requests.push(JSON.parse(raw));
+    const nav=doc.createElement('nav');nav.setAttribute('data-app-navigation-rail','true');nav.innerHTML='<div></div><div><button aria-haspopup="menu" aria-label="打开个人资料菜单">我的</button></div>';doc.body.append(nav);
+    const group=(id,kind='local',active=false)=>{
+      const element=doc.createElement('div');element.setAttribute('data-sidebar-project-container-id',`project:${id}`);element.setAttribute('data-sidebar-project-kind',kind);
+      element.innerHTML=`<div data-app-action-sidebar-project-row data-app-action-sidebar-project-id="${id}" data-app-action-sidebar-project-label="同名项目"><span class="icon-leading-slot"><span data-sidebar-project-drop-zone="project-icon" data-sidebar-project-kind="${kind}" data-sidebar-project-container-id="project:${id}"><svg></svg></span></span><button id="menu-${id}" aria-haspopup="menu" aria-expanded="true"></button></div><div data-app-action-sidebar-thread-row data-app-action-sidebar-thread-id="thread-${id}" data-app-action-sidebar-thread-kind="local" data-app-action-sidebar-thread-host-id="local" data-app-action-sidebar-thread-pinned="false" data-app-action-sidebar-thread-selected="${active}"><span data-thread-title-trigger="true"><span data-thread-title="true">对话</span></span></div>`;
+      doc.body.append(element);return element;
+    };
+    const a=group('a'),b=group('b','local',true);
+    const nativeMenu=doc.createElement('div');nativeMenu.setAttribute('role','menu');nativeMenu.setAttribute('aria-labelledby','menu-a');nativeMenu.innerHTML='<button role="menuitem">置顶</button>';doc.body.append(nativeMenu);
+    try{
+      install(adapter,preferences,{product:'color-labels.v1',storageKey:'wheel-fixture',initialPreferences:{version:1,paused:false,projects:{'local:a':'purple','local:b':'green','local:absent':'blue'}},persistenceBinding:'saveFixture',sessionToken:'wheel'},win);
+      const api=win.__codexColorLabelsDemo,panel=doc.getElementById('ccld-panel'),select=doc.getElementById('ccld-project-select'),wheel=panel.querySelector('canvas'),reset=panel.querySelector('[data-ccld-action="reset-project"]');
+      doc.querySelector('button[aria-label="项目配色"]').click();
+      const ack=()=>api.persistenceAck('wheel',requests.at(-1).revision,true);
+      const point=(dx,dy)=>{const r=wheel.getBoundingClientRect();return{clientX:r.left+r.width/2+dx,clientY:r.top+r.height/2+dy};};
+      const event=(type,dx,dy,target=doc)=>target.dispatchEvent(new win.PointerEvent(type,{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',button:0,isPrimary:true,...point(dx,dy)}));
+      const start=()=>event('pointerdown',3,0,wheel);
+      const choose=key=>{select.value=key;select.dispatchEvent(new win.Event('change',{bubbles:true}));};
+      const custom=panel.querySelector('[data-ccld-action="custom-color"]'),fixed=[...panel.querySelectorAll('.ccld-fixed-swatch')];
+      check('默认单行六色，色轮收起且原项目菜单保持原样',fixed.length===6&&doc.getElementById('ccld-custom-region').hidden&&custom.getAttribute('aria-expanded')==='false'&&!nativeMenu.querySelector('[data-ccld-owner="palette"]')&&nativeMenu.querySelector('[role="menuitem"]').textContent==='置顶');
+      const rects=fixed.map(button=>button.getBoundingClientRect());check('六色单行无名称，紧凑面板不溢出',rects.every(rect=>rect.top===rects[0].top)&&fixed.every(button=>!button.textContent&&button.title)&&panel.scrollWidth<=panel.clientWidth&&panel.getBoundingClientRect().height<=240);
+      check('旧绿色配色显示唯一细圈与勾号状态',fixed.filter(button=>button.getAttribute('aria-pressed')==='true').length===1&&fixed.find(button=>button.getAttribute('aria-pressed')==='true').getAttribute('data-ccld-choice')==='green');
+      fixed.find(button=>button.getAttribute('data-ccld-choice')==='blue').click();check('固定色点击仅保存目标项目一次',requests.length===1&&api.getPreferences().projects['local:b']==='blue'&&api.getPreferences().projects['local:a']==='purple');ack();
+      fixed.find(button=>button.getAttribute('data-ccld-choice')==='green').click();ack();requests.length=0;
+      check('按当前对话和项目 ID 选择，兼容已有配色',select.value==='local:b'&&select.options.length===2&&wheel.getAttribute('aria-valuetext').includes('#258347'));
+      const trigger=doc.getElementById('ccld-project-trigger'),list=doc.getElementById('ccld-project-list');trigger.click();
+      list.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true}));doc.activeElement.click();
+      check('项目列表键盘选择按身份切换，勾选同步且不写入',select.value==='local:a'&&list.querySelector('[aria-selected="true"]').getAttribute('data-ccld-project-key')==='local:a'&&requests.length===0&&list.hidden);
+      trigger.dispatchEvent(new win.KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}));doc.activeElement.click();
+      check('同名项目也能独立选择，色轮同步到正确项目',select.value==='local:b'&&wheel.getAttribute('aria-valuetext').includes('#258347')&&requests.length===0);
+      custom.click();check('自定义展开色轮，未改变配色',!doc.getElementById('ccld-custom-region').hidden&&custom.getAttribute('aria-expanded')==='true'&&requests.length===0);
+      start();for(let i=0;i<40;i++)event('pointermove',40+i,0);api.refresh();
+      check('拖动实时预览，不写本地缓存或发保存请求',b.querySelector('[data-app-action-sidebar-project-row]').getAttribute('data-ccld-color')==='#ff0000'&&api.getPreferences().projects['local:b']==='green'&&requests.length===0&&JSON.parse(cache.get('wheel-fixture')).projects['local:b']==='green');
+      check('拖动期间锁定项目选择，避免改错项目',select.disabled&&reset.disabled);
+      event('pointerup',90,0);check('松手只保存一次且只影响目标项目',requests.length===1&&api.getPreferences().projects['local:b']==='#ff0000'&&api.getPreferences().projects['local:a']==='purple'&&api.status().saving);ack();
+      check('自选色保留且不误标固定颜色',fixed.every(button=>button.getAttribute('aria-pressed')==='false')&&!panel.querySelector('.ccld-color-sample').hidden);
+      check('连续颜色在项目、图标和选中对话中一致且无底色',win.getComputedStyle(b.querySelector('svg')).color===win.getComputedStyle(b.querySelector('[data-thread-title]')).color&&win.getComputedStyle(b.querySelector('[data-app-action-sidebar-thread-row]')).backgroundColor==='rgba(0, 0, 0, 0)');
+      const count=requests.length;start();event('pointermove',0,-90);api.refresh();wheel.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+      check('Escape 取消未提交的拖动并还原颜色',requests.length===count&&api.getPreferences().projects['local:b']==='#ff0000'&&b.querySelector('[data-app-action-sidebar-project-row]').getAttribute('data-ccld-color')==='#ff0000'&&!select.disabled);
+      start();event('pointermove',-90,0);event('pointercancel',-90,0);check('指针中断不提交颜色',requests.length===count&&api.getPreferences().projects['local:b']==='#ff0000');
+      const keyEvent=new win.KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true});select.dispatchEvent(keyEvent);check('项目选择保留原生方向键',!keyEvent.defaultPrevented);
+      choose('local:a');check('切换项目同步色轮且不写入',wheel.getAttribute('aria-valuetext').includes('#bf5af2')&&requests.length===count);
+      reset.click();ack();check('恢复默认仅移除所选项目，其他颜色保留',!api.getPreferences().projects['local:a']&&api.getPreferences().projects['local:b']==='#ff0000'&&api.getPreferences().projects['local:absent']==='blue'&&reset.disabled);
+      wheel.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true}));ack();check('键盘也可选择连续色值',/^#[a-f0-9]{6}$/.test(api.getPreferences().projects['local:a']));
+      a.querySelector('[data-app-action-sidebar-project-row]').setAttribute('data-app-action-sidebar-project-label','修改后的名字');doc.body.prepend(b);api.refresh();check('重命名排序保持选中身份',select.value==='local:a'&&select.selectedOptions[0].textContent==='修改后的名字');
+      const before=requests.length;start();a.remove();event('pointermove',0,90);event('pointerup',0,90);api.refresh();check('拖动期间项目被移除时不误保存到其他项目',requests.length===before&&api.getPreferences().projects['local:b']==='#ff0000'&&select.value==='local:b');
+      api.pause();ack();start();event('pointermove',0,-90);event('pointerup',0,-90);ack();check('停止状态可选色但不重新开启上色',api.status().paused&&!b.querySelector('[data-ccld-color]')&&api.getPreferences().projects['local:b']==='#8000ff');
+      const duplicate=group('b');api.refresh();check('无法确认项目时禁用色轮，配置保留',wheel.getAttribute('aria-disabled')==='true'&&select.disabled&&api.getPreferences().projects['local:b']==='#8000ff');duplicate.remove();api.refresh();
+      const rect=panel.getBoundingClientRect();check('展开色轮面板在小窗口内',rect.top>=0&&rect.bottom<=win.innerHeight&&rect.height<=350);
+      custom.click();check('收起自定义不会清除原有自选色',doc.getElementById('ccld-custom-region').hidden&&api.getPreferences().projects['local:b']==='#8000ff');
+      api.destroy();check('销毁清理自选颜色属性、私有样式和界面，保留原生菜单',!doc.querySelector('[data-ccld-owner],[data-ccld-color],#ccld-style')&&!b.querySelector('[style*="--ccld-custom"]')&&!!nativeMenu.querySelector('[role="menuitem"]'));
+      return{passed:true,checks,scope:'受控浏览器，连续拖动、取消、身份变化和保存回执；不改用户配色'};
+    }catch(error){return{passed:false,error:error.message,checks};}finally{win.__codexColorLabelsDemo?.destroy();iframe.remove();}
+  };
+  const report=await session.expression(`(${run.toString()})(${createAdapter.toString()},${createPreferences.toString()},${installRenderer.toString()})`);
+  await fs.writeFile(new URL('./wheel-browser.json',import.meta.url),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=1;
+}finally{session.close();}

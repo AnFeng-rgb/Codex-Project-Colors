@@ -1,0 +1,19 @@
+# Local configuration and runtime state
+.DS_Store
+/data/
+/demo/runtime/
+/node_modules/
+# Rebuildable application, runtime cache and distribution exports
+/release/
+/publishing/packages/
+# Generated acceptance output (source fixtures and design assets remain visible)
+/verification/release/*.json
+/verification/release/package-check-*/
+/verification/release/index-check-*/
+/verification/release/first-use-live-data-*/
+/verification/release/first-use-unit-tests.txt
+/verification/release/clean-reinstall-unit-tests.txt
+/verification/release/StartupFixture.app/
+/verification/release/startup-probe
+/verification/release/native-recovery-test
+/verification/release/capture-window

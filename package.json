@@ -1,0 +1,16 @@
+{
+  "name": "codex-project-colors",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test src/*.test.mjs demo/core/*.test.mjs",
+    "build:macos": "node src/macos/build.mjs",
+    "export:packages": "node scripts/prepare-publish.mjs",
+    "verify:package": "node scripts/verify-publish.mjs"
+  }
+}
