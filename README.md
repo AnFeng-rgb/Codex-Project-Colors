@@ -1,10 +1,10 @@
 # Codex Project Colors · Codex 项目配色
 
-macOS 上的 Codex 项目配色与账号额度辅助程序，版本 1.0.0，发布标签 `v1.0.0-balance`。本项目是社区工具，不代表 OpenAI 官方发布或支持。
+macOS 上的 Codex 项目配色与账号额度辅助程序，版本 1.0.0，发布标签 `v1.0.0-balance-icon`。本项目是社区工具，不代表 OpenAI 官方发布或支持。
 
 ## 一次安装后的使用
 
-从 [Releases](https://github.com/AnFeng-rgb/Codex-Project-Colors/releases) 下载 `CodexProjectColors-v1.0.0-balance-macos-arm64.zip`。程序内置 Node.js 24.21.0，不需要普通使用者另装运行环境。源码下载包需按下方“开发”说明构建程序。解压程序包，双击 Codex Project Colors.app，点击“安装并启用”，阅读并接受启动行为说明。
+从 [Releases](https://github.com/AnFeng-rgb/Codex-Project-Colors/releases) 下载 `CodexProjectColors-v1.0.0-balance-icon-macos-arm64.zip`。程序内置 Node.js 24.21.0，不需要普通使用者另装运行环境。源码下载包需按下方“开发”说明构建程序。解压程序包，双击 Codex Project Colors.app，点击“安装并启用”，阅读并接受启动行为说明。
 
 程序会复制到个人“应用程序”目录，配色独立保存在 `~/Library/Application Support/CodexProjectColors`，并注册用户级登录助手。安装成功后仍使用原官方图标，管理窗口可以关闭，原解压包不再是运行依赖。
 

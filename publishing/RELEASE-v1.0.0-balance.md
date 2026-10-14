@@ -1,8 +1,12 @@
 ## 1.0 新增余额 / 额度功能
 
-发布标签：**v1.0.0-balance**。这里的余额指账号剩余额度；本版本显示五小时和周额度，不是现金余额或月额度。
+发布标签：**v1.0.0-balance-icon**。这里的余额指账号剩余额度；本版本显示五小时和周额度，不是现金余额或月额度。
 
-普通使用者请下载 **CodexProjectColors-v1.0.0-balance-macos-arm64.zip**，无需自行编译或安装 Node。解压后双击程序，点击“安装并启用”；以后继续使用原官方图标。源码使用 `CodexProjectColors-v1.0.0-balance-source.zip` 或 GitHub 的 Source code 下载。
+普通使用者请下载 **CodexProjectColors-v1.0.0-balance-icon-macos-arm64.zip**，无需自行编译或安装 Node。解压后双击程序，点击“安装并启用”；以后继续使用原官方图标。源码使用 `CodexProjectColors-v1.0.0-balance-icon-source.zip` 或 GitHub 的 Source code 下载。
+
+### 2026-10-14 图标修订
+
+本次更新现有 1.0 Release，补充六色文件夹与绿色额度圆环的应用图标。程序包和源码包已重新生成，源码包包含图标原图与转换脚本。应用版本仍为 1.0.0，修订标签为 `v1.0.0-balance-icon`；原 `v1.0.0-balance` 标签保留。
 
 ### 本次更新
 

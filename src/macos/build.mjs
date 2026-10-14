@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { VERSION } from '../version.mjs';
+import { buildIcon } from './build-icon.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -12,7 +13,8 @@ await fs.mkdir(path.join(contents,'Resources/tool/src'),{recursive:true});
 await fs.mkdir(path.join(contents,'Resources/tool/demo/platforms/macos'),{recursive:true});
 await fs.writeFile(path.join(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>CFBundleExecutable</key><string>ColorLabels</string><key>CFBundleIdentifier</key><string>local.codex-project-colors.manager</string><key>CFBundleName</key><string>Codex 项目配色</string><key>CFBundleDisplayName</key><string>Codex 项目配色</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${VERSION}</string><key>CFBundleVersion</key><string>10000</string><key>NSHighResolutionCapable</key><true/><key>NSPrincipalClass</key><string>NSApplication</string></dict></plist>`);
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>ColorLabels</string><key>CFBundleIdentifier</key><string>local.codex-project-colors.manager</string><key>CFBundleName</key><string>Codex 项目配色</string><key>CFBundleDisplayName</key><string>Codex 项目配色</string><key>CFBundleIconFile</key><string>AppIcon</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${VERSION}</string><key>CFBundleVersion</key><string>10001</string><key>NSHighResolutionCapable</key><true/><key>NSPrincipalClass</key><string>NSApplication</string></dict></plist>`);
+await buildIcon(root, path.join(contents, 'Resources'));
 for(const file of ['agent.mjs','cli.mjs','settings.mjs','preferences-store.mjs','commands.mjs','browser-session.mjs','installation.mjs','first-use.mjs','quota.mjs','ui-settings.mjs','version.mjs'])await fs.copyFile(path.join(root,'src',file),path.join(contents,'Resources/tool/src',file));
 await fs.cp(path.join(root,'src/startup'),path.join(contents,'Resources/tool/src/startup'),{recursive:true});
 const cache=path.join(root,`release/runtime-cache/node-v24.21.0-darwin-${process.arch==='arm64'?'arm64':'x64'}`);

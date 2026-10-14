@@ -26,7 +26,7 @@ for (const directory of ['src', 'demo/core']) {
     if (entry.isFile() && entry.name.endsWith('.mjs')) await copy(path.join(root, directory, entry.name), path.join(source, directory, entry.name));
   }
 }
-for (const file of ['src/macos/Manager.m', 'src/macos/StartupBridge.m', 'src/macos/build.mjs', 'src/macos/fetch-runtime.mjs', 'src/macos/sign-release.mjs', 'src/macos/node.entitlements.plist', 'src/startup/controller.mjs', 'src/startup/watch.mjs', 'third-party/codex-usage-badge-LICENSE', 'demo/platforms/macos/launch.mjs']) await copy(path.join(root, file), path.join(source, file));
+for (const file of ['assets/app-icon/AppIcon.png', 'assets/app-icon/README.md', 'src/macos/Manager.m', 'src/macos/StartupBridge.m', 'src/macos/build-icon.mjs', 'src/macos/build.mjs', 'src/macos/fetch-runtime.mjs', 'src/macos/sign-release.mjs', 'src/macos/node.entitlements.plist', 'src/startup/controller.mjs', 'src/startup/watch.mjs', 'third-party/codex-usage-badge-LICENSE', 'demo/platforms/macos/launch.mjs']) await copy(path.join(root, file), path.join(source, file));
 for (const file of ['sidebar-browser.mjs', 'wheel-browser.mjs', 'randomize-browser.mjs', 'first-use-browser.mjs']) await copy(path.join(root, 'verification/release', file), path.join(source, 'verification/release', file));
 await fs.writeFile(path.join(source, 'package.json'), JSON.stringify({
   name: 'codex-project-colors', version, private: true, type: 'module', license: 'MIT', engines: { node: '>=24' },
@@ -41,7 +41,7 @@ const { stdout: architecture } = await exec('/usr/bin/lipo', ['-archs', path.joi
 if (architecture.trim() !== 'arm64') throw new Error('此预览包名称只适用于 arm64 程序');
 const expectedAppFiles = new Set([
   'Contents/Info.plist', 'Contents/MacOS/ColorLabels', 'Contents/_CodeSignature/CodeResources',
-  'Contents/Resources/node', 'Contents/Resources/startup-bridge', 'Contents/Resources/NODE-LICENSE', 'Contents/Resources/LICENSE', 'Contents/Resources/STARTUP-LICENSE',
+  'Contents/Resources/AppIcon.icns', 'Contents/Resources/node', 'Contents/Resources/startup-bridge', 'Contents/Resources/NODE-LICENSE', 'Contents/Resources/LICENSE', 'Contents/Resources/STARTUP-LICENSE',
   ...['agent.mjs', 'cli.mjs', 'settings.mjs', 'preferences-store.mjs', 'commands.mjs', 'browser-session.mjs', 'installation.mjs', 'first-use.mjs', 'quota.mjs', 'ui-settings.mjs', 'version.mjs'].map(name => `Contents/Resources/tool/src/${name}`),
   ...['controller.mjs', 'watch.mjs'].map(name => `Contents/Resources/tool/src/startup/${name}`),
   ...['renderer.mjs', 'adapter.mjs', 'preferences.mjs', 'cdp.mjs', 'injector.mjs', 'quota-renderer.mjs'].map(name => `Contents/Resources/tool/demo/core/${name}`),
