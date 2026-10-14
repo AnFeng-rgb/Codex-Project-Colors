@@ -102,13 +102,13 @@ export function installQuotaRenderer(createAdapter, createQuotaView, initial, op
       }
       if(urgentCount){const badge=el('span','!','cclq-alert');badge.setAttribute('aria-hidden','true');trigger.append(badge);}
       trigger.title=stale?(value?.error||'额度暂不可用'):windows.length?windows.map(w=>`${w.label}剩余 ${Math.round(w.remaining)}%`).join(' · '):'周额度数据暂不可用';
-      if(urgentCount)trigger.title+=`${trigger.title?' · ':''}${urgentCount}张充值卡将在3天内到期`;
+      if(urgentCount)trigger.title+=`${trigger.title?' · ':''}${urgentCount}张重置卡将在3天内到期`;
       trigger.setAttribute('aria-label',`账号额度 · ${trigger.title}`);
       const header=el('div',undefined,'cclq-header'),closeButton=el('button','×','cclq-close');closeButton.type='button';closeButton.setAttribute('aria-label','关闭账号额度');header.append(el('span','账号额度'),closeButton);
       const content=el('div',undefined,'cclq-content');
       for(const w of windows){const section=el('div',undefined,'cclq-section'),row=el('div',undefined,'cclq-row'),remaining=el('span',`剩余 ${Math.round(w.remaining)}%`);remaining.style.color=stale?'var(--color-text-secondary,#777)':tone(w.remaining);row.append(el('strong',w.label),remaining);const reset=date(w.resetsAt);section.append(row,el('div',reset?`${reset} 重置`:'重置时间未提供','cclq-muted cclq-date'));content.append(section);}
       if(!windows.length)content.append(el('div',value?.error||(value?.updatedAt?'周额度数据暂不可用':'正在读取额度…'),'cclq-section cclq-muted'));
-      const cards=value?.cards??{count:null,details:null},section=el('div',undefined,'cclq-section'),row=el('div',undefined,'cclq-row');row.append(el('strong','充值卡'),el('span',cards.count===null?'未提供':`剩余 ${cards.count} 张`,'cclq-muted'));section.append(row);
+      const cards=value?.cards??{count:null,details:null},section=el('div',undefined,'cclq-section'),row=el('div',undefined,'cclq-row');row.append(el('strong','重置卡'),el('span',cards.count===null?'未提供':`剩余 ${cards.count} 张`,'cclq-muted'));section.append(row);
       if(cards.count===null)section.append(el('div','服务暂未提供重置卡信息','cclq-muted cclq-date'));
       else if(cards.count===0)section.append(el('div','暂无可用卡','cclq-muted cclq-date'));
       else if(!details?.length)section.append(el('div','到期明细未提供','cclq-muted cclq-date'));

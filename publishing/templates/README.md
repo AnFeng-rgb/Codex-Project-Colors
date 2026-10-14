@@ -1,10 +1,10 @@
 # Codex Project Colors · Codex 项目配色
 
-macOS 上的 Codex 项目配色与账号额度辅助程序，版本 1.0.0，发布标签 `v1.0.0-balance-icon`。本项目是社区工具，不代表 OpenAI 官方发布或支持。
+macOS 上的 Codex 项目配色与账号额度辅助程序，版本 1.0.0，发布标签 `v1.0.0-balance-reset-card`。本项目是社区工具，不代表 OpenAI 官方发布或支持。
 
 ## 一次安装后的使用
 
-从 [Releases](https://github.com/AnFeng-rgb/Codex-Project-Colors/releases) 下载 `CodexProjectColors-v1.0.0-balance-icon-macos-arm64.zip`。程序内置 Node.js 24.21.0，不需要普通使用者另装运行环境。源码下载包需按下方“开发”说明构建程序。解压程序包，双击 Codex Project Colors.app，点击“安装并启用”，阅读并接受启动行为说明。
+从 [Releases](https://github.com/AnFeng-rgb/Codex-Project-Colors/releases) 下载 `CodexProjectColors-v1.0.0-balance-reset-card-macos-arm64.zip`。程序内置 Node.js 24.21.0，不需要普通使用者另装运行环境。源码下载包需按下方“开发”说明构建程序。解压程序包，双击 Codex Project Colors.app，点击“安装并启用”，阅读并接受启动行为说明。
 
 程序会复制到个人“应用程序”目录，配色独立保存在 `~/Library/Application Support/CodexProjectColors`，并注册用户级登录助手。安装成功后仍使用原官方图标，管理窗口可以关闭，原解压包不再是运行依赖。
 
@@ -25,7 +25,7 @@ macOS 上的 Codex 项目配色与账号额度辅助程序，版本 1.0.0，发�
 ## 1.0 新增余额 / 额度功能
 
 - 侧边栏同一张窄卡片包含额度和调色盘两个独立按钮，无分隔横线，各自有悬浮底色；额度按钮显示同尺寸的剩余额度圆环，按实际数据显示五小时加周额度或仅周额度。
-- 点击打开宽度最多 200px 的详情，显示额度重置时间、可用重置卡张数和单行到期时间；界面沿用“充值卡”名称，对应接口中的额度重置卡，不将充值余额换算成卡券。
+- 点击打开宽度最多 200px 的详情，显示额度重置时间、可用重置卡张数和单行到期时间；界面显示“重置卡”，对应接口中的额度重置卡，不将充值余额换算成卡券。
 - 三天内到期的可用卡优先显示，日期和“即将到期”为红色；收起时有独立红色“!”及悬停数量提示，不改变额度圆环颜色。
 - 配色面板底部有独立“显示账号额度”开关，关闭后仍保留调色盘入口，状态在重连后保留；隐藏时停止额度读取。
 - 仅显示五小时加周额度或仅周额度，不加倒计时、系统通知和手动刷新按钮；正常读数不增加常驻状态说明。

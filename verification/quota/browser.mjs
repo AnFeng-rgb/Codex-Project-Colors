@@ -49,7 +49,7 @@ try{
  await page.click('[data-ccld-action="toggle"]');check('停止项目上色不隐藏账号额度',await page.evaluate(()=>window.__codexColorLabelsDemo.getPreferences().paused&&!document.querySelector('#cclq-slot').hidden));await page.click('[data-ccld-action="toggle"]');
  await page.keyboard.press('Escape');
  await page.evaluate(live=>{const now=Date.now()/1000;window.__codexProjectQuota.update({...live,updatedAt:Date.now(),cards:{count:3,details:[{expiresAt:now+6*86400},{expiresAt:now+2*86400},{expiresAt:null,noExpiry:true}]}});},live);
- check('收起状态显示独立红色临期徽标并有数量提示',await page.evaluate(()=>!!document.querySelector('.cclq-alert')&&document.querySelector('#cclq-trigger').title.includes('1张充值卡将在3天内到期')&&getComputedStyle(document.querySelector('.cclq-ring .cclq-value')).stroke!=='rgb(200, 48, 66)'));
+ check('收起状态显示独立红色临期徽标并有数量提示',await page.evaluate(()=>!!document.querySelector('.cclq-alert')&&document.querySelector('#cclq-trigger').title.includes('1张重置卡将在3天内到期')&&getComputedStyle(document.querySelector('.cclq-ring .cclq-value')).stroke!=='rgb(200, 48, 66)'));
  await page.screenshot({path:fileURLToPath(new URL('./dark-urgent-collapsed.png',import.meta.url))});
  await page.click('#cclq-trigger');
  check('临期卡在首行且只显示一次即将到期，不增加标签',await page.evaluate(()=>{const rows=[...document.querySelectorAll('.cclq-card')];return rows[0].dataset.urgent==='true'&&rows[0].textContent.endsWith('即将到期')&&!rows[0].textContent.includes('到期即将')&&document.querySelectorAll('.cclq-expiry-state').length===3;}));
