@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPreferences } from './preferences.mjs';
-import { validateEndpoint, isMainTarget, discover } from './cdp.mjs';
+import { validateEndpoint, isMainTarget, discover, discoverAll } from './cdp.mjs';
 import { createServer } from 'node:http';
 
 function memory() {
@@ -58,6 +58,7 @@ test('发现接口拒绝未知服务、多个主窗口、非本机 WebSocket 和
     await assert.rejects(discover(port),/未找到/);
     body=JSON.stringify([target]);assert.equal((await discover(port)).id,'one');
     body=JSON.stringify([target,{...target,id:'two'}]);await assert.rejects(discover(port),/多个主窗口/);
+    assert.deepEqual((await discoverAll(port)).map(item=>item.id),['one','two']);
     body=JSON.stringify([target,{...target,id:'two',url:'app://-/index.html?initialRoute=%2Flocal%2Fother'}]);
     assert.equal((await discover(port,undefined,{preferredURL:'app://-/index.html'})).id,'one');
     await assert.rejects(discover(port,undefined,{preferredURL:'app://-/index.html?missing'}),/未找到/);

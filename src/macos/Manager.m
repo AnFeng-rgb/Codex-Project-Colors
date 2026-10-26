@@ -15,7 +15,6 @@
 @property NSTimer *timer;
 @property BOOL busy;
 @property BOOL paused;
-@property NSString *requestedWindowURL;
 @property BOOL running;
 @property BOOL installed;
 @property BOOL automatic;
@@ -145,7 +144,11 @@
     if(self.automatic&&!connected&&![status isEqualToString:@"等待下次正常打开"])status=@"自动配色已启用";
     if(self.automatic&&!self.watcherRunning)status=@"启动助手等待恢复";
     if(renderer[@"error"]&&[renderer[@"error"] length])status=@"保存需要处理";
-    else if(connected)status=self.paused?@"上色已暂停":([renderer[@"saving"] boolValue]?@"正在保存配色…":@"已连接");
+    else if(connected){
+        NSInteger count=[renderer[@"connectedWindowCount"] integerValue];
+        NSString *connectedText=count>0?[NSString stringWithFormat:@"已连接 %ld 个窗口",(long)count]:@"已连接";
+        status=self.paused?@"上色已暂停":([renderer[@"saving"] boolValue]?@"正在保存配色…":connectedText);
+    }
     self.statusLabel.stringValue=status;
     NSString *detail=state[@"detail"];
     if(renderer[@"error"]&&[renderer[@"error"] length])detail=renderer[@"error"];
@@ -160,7 +163,6 @@
             NSTask *task=[NSTask new];task.executableURL=[NSURL fileURLWithPath:self.node];
             NSMutableArray *arguments=[NSMutableArray arrayWithObjects:self.tool,action,nil];
             if([action isEqualToString:@"install-auto"])[arguments addObjectsFromArray:@[@"--bundle",NSBundle.mainBundle.bundlePath,@"--import-data",self.importData]];
-            if([action isEqualToString:@"select-window"]&&self.requestedWindowURL)[arguments addObject:self.requestedWindowURL];
             [arguments addObjectsFromArray:@[@"--data-dir",self.dataDir,@"--legacy-runtime",self.legacyRuntime]];
             task.arguments=arguments;
             NSPipe *out=[NSPipe pipe];task.standardOutput=out;task.standardError=[NSFileHandle fileHandleWithNullDevice];
@@ -173,7 +175,6 @@
             dispatch_async(dispatch_get_main_queue(),^{
                 self.busy=NO;
                 if([action isEqualToString:@"uninstall-auto"]&&[state[@"ok"] boolValue]){[self.timer invalidate];[NSApp terminate:nil];return;}
-                if([action isEqualToString:@"windows"]&&[state[@"ok"] boolValue]){[self presentWindows:state[@"windows"]];return;}
                 [self applyState:state];
                 if(!quiet&&![state[@"ok"] boolValue]&&!self.smokeOutput)[self showError:state[@"detail"]];
             });
@@ -192,7 +193,7 @@
 }
 - (void)more:(id)sender {
     NSMenu *menu=[NSMenu new];
-    for(NSArray *entry in @[@[@"选择连接窗口…",NSStringFromSelector(@selector(chooseWindow:))],@[@"手动重新连接",NSStringFromSelector(@selector(reconnect:))],@[@"选择官方应用…",NSStringFromSelector(@selector(chooseApplication:))],@[@"清除全部配色…",NSStringFromSelector(@selector(clear:))],@[@"恢复上一版备份…",NSStringFromSelector(@selector(restore:))],@[@"查看运行记录",NSStringFromSelector(@selector(openLogs:))],@[@"卸载自动配色…",NSStringFromSelector(@selector(uninstall:))]]) {
+    for(NSArray *entry in @[@[@"手动重新连接",NSStringFromSelector(@selector(reconnect:))],@[@"选择官方应用…",NSStringFromSelector(@selector(chooseApplication:))],@[@"清除全部配色…",NSStringFromSelector(@selector(clear:))],@[@"恢复上一版备份…",NSStringFromSelector(@selector(restore:))],@[@"查看运行记录",NSStringFromSelector(@selector(openLogs:))],@[@"卸载自动配色…",NSStringFromSelector(@selector(uninstall:))]]) {
         NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:entry[0] action:NSSelectorFromString(entry[1]) keyEquivalent:@""];item.target=self;[menu addItem:item];
     }
     [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,0) inView:sender];
@@ -211,19 +212,6 @@
         [NSFileManager.defaultManager createDirectoryAtPath:self.dataDir withIntermediateDirectories:YES attributes:nil error:nil];
         [[NSJSONSerialization dataWithJSONObject:settings options:NSJSONWritingPrettyPrinted error:nil] writeToFile:file atomically:YES];
         if(self.automatic)[self execute:@"enable-auto" quiet:NO];
-    }];
-}
-- (void)chooseWindow:(id)sender {[self execute:@"windows" quiet:NO];}
-- (void)presentWindows:(NSArray *)windows {
-    if(!windows.count){[self showError:@"没有找到带侧边栏的主窗口。请先从本工具开启应用的调试接口。"];return;}
-    NSAlert *alert=[NSAlert new];alert.messageText=@"选择需要配色的窗口";
-    alert.informativeText=@"首阶段只管理你选定的这个窗口，其他窗口保持原样。选择后点击开启配色。";
-    NSPopUpButton *popup=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,0,350,28) pullsDown:NO];
-    for(NSDictionary *window in windows){[popup addItemWithTitle:window[@"title"]];popup.lastItem.representedObject=window[@"url"];}
-    alert.accessoryView=popup;[alert addButtonWithTitle:@"使用此窗口"];[alert addButtonWithTitle:@"取消"];
-    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response){
-        if(response==NSAlertFirstButtonReturn){self.requestedWindowURL=popup.selectedItem.representedObject;[self execute:@"select-window" quiet:NO];}
-        else [self execute:@"status" quiet:YES];
     }];
 }
 - (void)chooseNode:(id)sender {

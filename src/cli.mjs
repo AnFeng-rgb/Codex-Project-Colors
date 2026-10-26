@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { settings } from './settings.mjs';
-import { PreferenceStore, atomicWrite } from './preferences-store.mjs';
-import { discover, Session, isMainTarget } from '../demo/core/cdp.mjs';
+import { PreferenceStore } from './preferences-store.mjs';
+import { discoverAll, Session } from '../demo/core/cdp.mjs';
 import {configureInstallation,installationStatus} from './installation.mjs';
 
 const action=process.argv[2]??'status';
@@ -31,14 +31,25 @@ async function stopDirectory(runtime){
   throw new Error('后台尚未确认停止；没有强制结束进程，请稍后重试');
 }
 async function control(method){
-  const session=new Session((await discover(opts.port,opts.targetURL,{preferredURL:opts.windowURL})).webSocketDebuggerUrl);await session.connect();
-  try{return await session.evaluate(async method=>{
-    const api=window.__codexColorLabelsDemo;if(api?.product!=='color-labels.v1')throw new Error('正式版尚未连接');
-    const operation=method==='clear'?'clearColors':method;
-    if(!api[operation]())throw new Error(api.status().error||'操作没有完成');
-    if(!await api.flushPersistence())throw new Error(api.status().error||'保存没有得到确认');
-    return api.status();
-  },method);}finally{session.close();}
+  const targets=await discoverAll(opts.port,opts.targetURL);
+  if(!targets.length)throw new Error('没有找到已接入的官方应用窗口');
+  let lastError;
+  for(const target of targets){
+    const session=new Session(target.webSocketDebuggerUrl);
+    try{
+      await session.connect();
+      const status=await session.evaluate(async method=>{
+        const api=window.__codexColorLabelsDemo;if(api?.product!=='color-labels.v1')throw new Error('此窗口尚未接入');
+        const operation=method==='clear'?'clearColors':method;
+        if(!api[operation]())throw new Error(api.status().error||'操作没有完成');
+        if(!await api.flushPersistence())throw new Error(api.status().error||'保存没有得到确认');
+        return api.status();
+      },method);
+      if(status)return status;
+    }catch(error){lastError=error;}
+    finally{session.close();}
+  }
+  throw lastError??new Error('没有可操作的已接入窗口');
 }
 try{
   opts=await settings();await fs.mkdir(opts.runtime,{recursive:true});
@@ -47,18 +58,10 @@ try{
     const argument=name=>{const index=process.argv.indexOf(name);return index<0?undefined:process.argv[index+1];};
     result={status:'设置已完成',...await configureInstallation(action.replace('-auto',''),{bundle:argument('--bundle'),importData:argument('--import-data')})};
   }else if(action==='windows'){
-    const list=await(await fetch(`http://127.0.0.1:${opts.port}/json/list`,{signal:AbortSignal.timeout(3000),redirect:'error'})).json();
-    if(!Array.isArray(list))throw new Error('本机调试窗口列表无效');
-    result={status:'请选择连接窗口',windows:list.filter(t=>isMainTarget(t,opts.targetURL)).map(t=>({title:t.title||'Codex 主窗口',url:t.url}))};
+    const list=await discoverAll(opts.port,opts.targetURL);
+    result={status:'自动连接所有主窗口',windowCount:list.length};
   }else if(action==='select-window'){
-    const url=process.argv[3];
-    await discover(opts.port,opts.targetURL,{preferredURL:url});
-    await stopDirectory(opts.runtime);
-    const file=path.join(opts.dataDir,'settings.json');
-    const config=await fs.readFile(file,'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return{};throw e;});
-    await atomicWrite(file,JSON.stringify({...config,windowURL:url},null,2)+'\n');
-    if((await installationStatus()).automatic)await configureInstallation('enable');
-    result={status:'已停止',detail:'已记住连接窗口，点击开启配色。',running:false};
+    result={status:'已启用自动接入',detail:'新版会自动连接所有受支持的主窗口，无需选择。',running:(await readState()).running};
   }else if(action==='status')result={...await readState(),installation:await installationStatus()};
   else if(action==='start'||action==='start-passive'){
     await new PreferenceStore(opts.dataDir).read();

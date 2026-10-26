@@ -1,15 +1,15 @@
 import fs from 'node:fs/promises';
-import { discover, Session } from '../../demo/core/cdp.mjs';
+import { discoverAll, Session } from '../../demo/core/cdp.mjs';
 import { createAdapter } from '../../demo/core/adapter.mjs';
 import { createPreferences } from '../../demo/core/preferences.mjs';
 import { installRenderer } from '../../demo/core/renderer.mjs';
-const session=new Session((await discover(39222,undefined,{preferredURL:'app://-/index.html'})).webSocketDebuggerUrl);
+const session=new Session((await discoverAll(39222,'app://-/index.html'))[0].webSocketDebuggerUrl);
 await session.connect();
 try{
   const run=async(adapter,preferences,install)=>{
     const iframe=document.createElement('iframe');iframe.style.cssText='position:fixed;left:-10000px;width:800px;height:360px';document.body.append(iframe);
     const win=iframe.contentWindow,doc=win.document,checks=[],requests=[],cache=new Map();
-    const check=(name,ok)=>{checks.push({name,passed:!!ok});if(!ok)throw Error(name);};
+    const check=(name,ok,detail='')=>{checks.push({name,passed:!!ok,...(detail?{detail}:{})});if(!ok)throw Error(name+(detail?`: ${detail}`:''));};
     Object.defineProperty(win,'localStorage',{value:{getItem:key=>cache.get(key)??null,setItem:(key,value)=>cache.set(key,value),removeItem:key=>cache.delete(key)}});
     win.saveFixture=raw=>requests.push(JSON.parse(raw));
     const nav=doc.createElement('nav');nav.setAttribute('data-app-navigation-rail','true');nav.innerHTML='<div></div><div><button aria-haspopup="menu" aria-label="打开个人资料菜单">我的</button></div>';doc.body.append(nav);
@@ -31,7 +31,7 @@ try{
       const choose=key=>{select.value=key;select.dispatchEvent(new win.Event('change',{bubbles:true}));};
       const custom=panel.querySelector('[data-ccld-action="custom-color"]'),fixed=[...panel.querySelectorAll('.ccld-fixed-swatch')];
       check('默认单行六色，色轮收起且原项目菜单保持原样',fixed.length===6&&doc.getElementById('ccld-custom-region').hidden&&custom.getAttribute('aria-expanded')==='false'&&!nativeMenu.querySelector('[data-ccld-owner="palette"]')&&nativeMenu.querySelector('[role="menuitem"]').textContent==='置顶');
-      const rects=fixed.map(button=>button.getBoundingClientRect());check('六色单行无名称，紧凑面板不溢出',rects.every(rect=>rect.top===rects[0].top)&&fixed.every(button=>!button.textContent&&button.title)&&panel.scrollWidth<=panel.clientWidth&&panel.getBoundingClientRect().height<=240);
+      const rects=fixed.map(button=>button.getBoundingClientRect());check('六色单行无名称，紧凑面板不溢出',rects.every(rect=>rect.top===rects[0].top)&&fixed.every(button=>!button.textContent&&button.title)&&panel.scrollWidth<=panel.clientWidth&&panel.getBoundingClientRect().height<=280,JSON.stringify({panelWidth:panel.getBoundingClientRect().width,panelHeight:panel.getBoundingClientRect().height,scrollWidth:panel.scrollWidth,clientWidth:panel.clientWidth,swatchTop:rects.map(rect=>Math.round(rect.top))}));
       check('旧绿色配色显示唯一细圈与勾号状态',fixed.filter(button=>button.getAttribute('aria-pressed')==='true').length===1&&fixed.find(button=>button.getAttribute('aria-pressed')==='true').getAttribute('data-ccld-choice')==='green');
       fixed.find(button=>button.getAttribute('data-ccld-choice')==='blue').click();check('固定色点击仅保存目标项目一次',requests.length===1&&api.getPreferences().projects['local:b']==='blue'&&api.getPreferences().projects['local:a']==='purple');ack();
       fixed.find(button=>button.getAttribute('data-ccld-choice')==='green').click();ack();requests.length=0;

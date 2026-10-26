@@ -42,7 +42,7 @@ if (architecture.trim() !== 'arm64') throw new Error('此预览包名称只适�
 const expectedAppFiles = new Set([
   'Contents/Info.plist', 'Contents/MacOS/ColorLabels', 'Contents/_CodeSignature/CodeResources',
   'Contents/Resources/AppIcon.icns', 'Contents/Resources/node', 'Contents/Resources/startup-bridge', 'Contents/Resources/NODE-LICENSE', 'Contents/Resources/LICENSE', 'Contents/Resources/STARTUP-LICENSE',
-  ...['agent.mjs', 'cli.mjs', 'settings.mjs', 'preferences-store.mjs', 'commands.mjs', 'browser-session.mjs', 'installation.mjs', 'first-use.mjs', 'quota.mjs', 'ui-settings.mjs', 'version.mjs'].map(name => `Contents/Resources/tool/src/${name}`),
+  ...['agent.mjs', 'cli.mjs', 'settings.mjs', 'preferences-store.mjs', 'commands.mjs', 'browser-session.mjs', 'installation.mjs', 'first-use.mjs', 'quota.mjs', 'ui-settings.mjs', 'shared-state.mjs', 'window-pool.mjs', 'shared-quota.mjs', 'version.mjs'].map(name => `Contents/Resources/tool/src/${name}`),
   ...['controller.mjs', 'watch.mjs'].map(name => `Contents/Resources/tool/src/startup/${name}`),
   ...['renderer.mjs', 'adapter.mjs', 'preferences.mjs', 'cdp.mjs', 'injector.mjs', 'quota-renderer.mjs'].map(name => `Contents/Resources/tool/demo/core/${name}`),
   'Contents/Resources/tool/demo/platforms/macos/launch.mjs',

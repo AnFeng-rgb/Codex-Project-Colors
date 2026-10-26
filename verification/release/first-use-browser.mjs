@@ -1,20 +1,25 @@
 import fs from 'node:fs/promises';
-import {discover,Session} from '../../demo/core/cdp.mjs';
+import {discoverAll,Session} from '../../demo/core/cdp.mjs';
 import {createAdapter} from '../../demo/core/adapter.mjs';
 import {createPreferences} from '../../demo/core/preferences.mjs';
 import {installRenderer} from '../../demo/core/renderer.mjs';
 import {initializeFirstPalette} from '../../src/first-use.mjs';
-const session=new Session((await discover(39222,'app://-/index.html')).webSocketDebuggerUrl);await session.connect();
+import {applyPreferenceOperation} from '../../src/shared-state.mjs';
+const session=new Session((await discoverAll(39222,'app://-/index.html'))[0].webSocketDebuggerUrl);await session.connect();
 try{
-  const run=async(adapter,preferences,install,initialize)=>{
+  const run=async(adapter,preferences,install,initialize,applyOperation)=>{
     const checks=[];const check=(name,value)=>{checks.push({name,passed:!!value});if(!value)throw Error(name);};
     const iframe=document.createElement('iframe');iframe.style.cssText='position:fixed;left:-10000px;width:800px;height:600px';document.body.append(iframe);
-    const win=iframe.contentWindow,doc=win.document,cache=new Map();let payloads=[],saveOK=true;
+    const win=iframe.contentWindow,doc=win.document,cache=new Map();let payloads=[],saveOK=true,canonical=null,stateVersion=0,randomBatches=new Map(),randomUndo=null;
     Object.defineProperty(win,'localStorage',{value:{getItem:key=>cache.get(key)??null,setItem:(key,value)=>cache.set(key,value),removeItem:key=>cache.delete(key)}});
-    win.saveFixture=raw=>{const payload=JSON.parse(raw);payloads.push(payload);queueMicrotask(()=>win.__codexColorLabelsDemo.persistenceAck(payload.token,payload.revision,saveOK,saveOK?'':'test save failure'));};
+    win.saveFixture=raw=>{const payload=JSON.parse(raw);payloads.push(payload);queueMicrotask(()=>{
+      const api=win.__codexColorLabelsDemo,keys=api.getProjectKeys();
+      if(saveOK){const result=applyOperation(canonical,payload.operation,{sourceProjectKeys:keys,allProjectKeys:keys,random:()=>0,randomBatches,now:Date.now(),model:preferences(null)});canonical=result.preferences;stateVersion++;if(result.randomUndo!==undefined)randomUndo=result.randomUndo;}
+      api.persistenceAck(payload.token,payload.revision,saveOK,saveOK?'':'test save failure',canonical,stateVersion,randomUndo);
+    });};
     const nav=doc.createElement('nav');nav.setAttribute('data-app-navigation-rail','true');nav.innerHTML='<div>导航</div><div><button aria-haspopup="menu" aria-label="打开个人资料菜单">我的</button></div>';doc.body.append(nav);
     const group=(id,kind='local')=>{const node=doc.createElement('div');node.setAttribute('data-sidebar-project-container-id',`project:${id}`);node.setAttribute('data-sidebar-project-kind',kind);node.innerHTML=`<div data-app-action-sidebar-project-row data-app-action-sidebar-project-id="${id}"><span class="icon-leading-slot"><span data-sidebar-project-drop-zone="project-icon"><svg></svg></span></span><button id="menu-${id}" aria-haspopup="menu"></button></div>`;doc.body.append(node);return node;};
-    const setup=value=>{payloads=[];install(adapter,preferences,{product:'color-labels.v1',storageKey:'first-use-fixture',initialPreferences:value,persistenceBinding:'saveFixture',sessionToken:'first-use-token'},win);return win.__codexColorLabelsDemo;};
+    const setup=value=>{payloads=[];canonical=preferences(null).validate(value);stateVersion=0;randomBatches=new Map();randomUndo=null;install(adapter,preferences,{product:'color-labels.v1',storageKey:'first-use-fixture',initialPreferences:value,persistenceBinding:'saveFixture',sessionToken:'first-use-token'},win);return win.__codexColorLabelsDemo;};
     try{
       let api=setup(preferences(null).empty());
       check('没有本地项目时等待，不消费首次初始化',!(await initialize(api)).complete&&payloads.length===0);
@@ -35,6 +40,6 @@ try{
       return{passed:checks.every(check=>check.passed),checks};
     }finally{win.__codexColorLabelsDemo?.destroy();iframe.remove();}
   };
-  const result=await session.expression(`(${run.toString()})(${createAdapter.toString()},${createPreferences.toString()},${installRenderer.toString()},${initializeFirstPalette.toString()})`);
+  const result=await session.expression(`(${run.toString()})(${createAdapter.toString()},${createPreferences.toString()},${installRenderer.toString()},${initializeFirstPalette.toString()},${applyPreferenceOperation.toString()})`);
   await fs.writeFile(new URL('./first-use-browser.json',import.meta.url),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));if(!result.passed)process.exitCode=1;
 }finally{session.close();}

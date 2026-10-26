@@ -20,16 +20,21 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     config = options.initialPreferences ? preferences.save(options.initialPreferences) : preferences.load();
   } catch (e) { error = e.message; storageHealthy = false; }
   let revision = 0, persistenceError = '', pendingSave = null;
+  let sharedStateVersion = Number.isSafeInteger(options.stateVersion) ? options.stateVersion : 0;
+  let deferredSharedState = null;
   const durable = Boolean(options.persistenceBinding && options.sessionToken);
   const inlineControls = options.product === 'color-labels.v1';
   let commandId = 0, pendingCommand = null, commandError = '', panel, launcher;
   let quotaToggle, uiRevision=0, pendingUI=null, uiError=options.uiSettingsError??'';
+  let uiSettingsVersion=Number.isSafeInteger(options.uiSettingsVersion)?options.uiSettingsVersion:0;
   const uiSettings={version:1,showQuota:options.uiSettings?.showQuota!==false};
   let projectSelect, projectGrid, projectReset, projectIcon, selectedProjectKey = null, lastActiveProjectKey = null, projectSignature = '';
   let wheel, wheelHandle, colorSample, colorDrag = null, colorPreview = null;
   let fixedPalette, customToggle, customRegion;
   let projectTrigger, projectTriggerLabel, projectList, randomUndo = null, undoTimer = null;
   const colorPaintCache = new Map();
+  const chatDotNodes = new Set();
+  let recentCatalogEntries = null, recentCatalogRequest = null, recentCatalogReadAt = 0, recentCatalogRefreshTimer = null, recentCatalogNeedsRefresh = false;
   let destroyed = false, frame = 0, heartbeat = Date.now(), refreshCount = 0;
   let current = adapter.inventory();
   const controller = new AbortController();
@@ -77,6 +82,19 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       background-color: rgb(var(--ccld-rgb));
       background-image: none;
       box-shadow: none;
+      pointer-events: none;
+    }
+    [data-ccld-chat-dot="true"] { position: relative; }
+    [data-ccld-chat-dot="true"]::before {
+      content: "";
+      position: absolute;
+      inset-inline-start: -6px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background-color: var(--color-text-secondary, #888);
       pointer-events: none;
     }
     [${owner}], [${owner}] button { color: inherit; -webkit-app-region: no-drag; }
@@ -472,23 +490,29 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     randomize.disabled = !connected || !storageHealthy || !current.ready || Boolean(pendingSave) || Boolean(colorDrag);
     toggle.disabled = !connected || !storageHealthy || Boolean(colorDrag);
   }
-  function persist() {
+  function persist(operation) {
     if (!durable) return;
     const value = ++revision;
     clearTimeout(pendingSave?.timer);
     persistenceError = '';
-    pendingSave = { revision: value, timer: window.setTimeout(() => {
+    pendingSave = { revision: value, operation, timer: window.setTimeout(() => {
       if (pendingSave?.revision !== value) return;
       pendingSave = null; persistenceError = '本机保存未得到确认；当前更改可能在重开后丢失，请重试。'; updateText();
     }, 8000) };
-    try { window[options.persistenceBinding](JSON.stringify({ token: options.sessionToken, revision: value, preferences: config })); }
+    try { window[options.persistenceBinding](JSON.stringify({ token: options.sessionToken, revision: value, operation })); }
     catch { clearTimeout(pendingSave.timer); pendingSave = null; persistenceError = '无法连接本机保存服务，当前更改尚未备份。'; }
     updateText();
   }
-  function commit(next) {
+  function commit(next, operation) {
     if (!storageHealthy) return false;
-    try { config = preferences.save(next); colorDrag=null;colorPreview=null;error = ''; persist(); refresh(); return true; }
+    try { config = preferences.save(next); colorDrag=null;colorPreview=null;error = ''; persist(operation); refresh(); return true; }
     catch (e) { error = `保存失败：${e.message}。此次更改未应用。`; updateText(); return false; }
+  }
+  function requestOperation(operation) {
+    if (!storageHealthy || !durable || pendingSave) return false;
+    persistenceError = '';
+    persist(operation);
+    return true;
   }
   function setColor(key, color) {
     current = adapter.inventory();
@@ -496,50 +520,65 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     if (!connected || !current.projects.some(p => p.key === key)) return false;
     const projects = { ...config.projects };
     if (color === null) delete projects[key]; else projects[key] = color;
-    const saved = commit({ ...config, projects });
-    if (saved) dismissRandomUndo(); return saved;
+    return commit({ ...config, projects }, { type: 'set-color', key, color });
   }
   function randomizeColors(options={}) {
     if (!connected || !storageHealthy || pendingSave) return false;
     current = adapter.inventory();
     if (!current.ready) return false;
-    const colors = Object.keys(palette), assigned = [], projects = { ...config.projects };
-    let previous;
-    while (assigned.length < current.projects.length) {
-      const bag = [...colors];
-      for (let i = bag.length - 1; i > 0; i--) {
-        const j = Math.floor(window.Math.random() * (i + 1));
-        [bag[i], bag[j]] = [bag[j], bag[i]];
+    if (!durable) {
+      const colors = Object.keys(palette), assigned = [], projects = { ...config.projects };
+      let previous;
+      while (assigned.length < current.projects.length) {
+        const bag = [...colors];
+        for (let i = bag.length - 1; i > 0; i--) { const j = Math.floor(window.Math.random() * (i + 1)); [bag[i], bag[j]] = [bag[j], bag[i]]; }
+        if (bag[0] === previous) [bag[0], bag[1]] = [bag[1], bag[0]];
+        const batch = bag.slice(0, current.projects.length - assigned.length); assigned.push(...batch); previous = batch.at(-1);
       }
-      if (bag[0] === previous) [bag[0], bag[1]] = [bag[1], bag[0]];
-      const batch = bag.slice(0, current.projects.length - assigned.length);
-      assigned.push(...batch); previous = batch.at(-1);
+      if (current.projects.every((project, index) => config.projects[project.key] === assigned[index])) {
+        for (let i = 0; i < assigned.length; i++) assigned[i] = colors[(colors.indexOf(assigned[i]) + 1) % colors.length];
+      }
+      current.projects.forEach((project, index) => { projects[project.key] = assigned[index]; });
+      if (!current.projects.length) return false;
+      const snapshot = { ...config.projects };
+      if (!commit({ ...config, projects }, { type: 'randomize' })) return false;
+      if (options.undo === false) dismissRandomUndo();
+      else { randomUndo = { projects: snapshot }; clearTimeout(undoTimer); undoTimer = window.setTimeout(() => dismissRandomUndo(), 30000); }
+      updateText(); return true;
     }
-    // A second click must have a visible effect, including for a single project.
-    if (current.projects.every((project, index) => config.projects[project.key] === assigned[index])) {
-      for (let i = 0; i < assigned.length; i++) assigned[i] = colors[(colors.indexOf(assigned[i]) + 1) % colors.length];
+    const keys = options.keys ?? current.projects.map(project => project.key);
+    if (!Array.isArray(keys) || !keys.length) return false;
+    const batchId = window.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const operation = { type: 'randomize', batchId, undo: options.undo !== false, ...(options.keys ? { keys } : {}) };
+    const requested = requestOperation(operation);
+    if (requested) updateText();
+    return requested;
+  }
+  function syncRandomUndo(value) {
+    clearTimeout(undoTimer); undoTimer = null;
+    randomUndo = value?.batchId ? { batchId: value.batchId } : null;
+    if (randomUndo) {
+      const remaining = Math.max(0, Math.min(30000, Number(value.expiresAt) - Date.now()));
+      undoTimer = window.setTimeout(() => dismissRandomUndo(), remaining);
     }
-    current.projects.forEach((project, index) => { projects[project.key] = assigned[index]; });
-    if (!current.projects.length) return false;
-    const snapshot = { ...config.projects };
-    if (!commit({ ...config, projects })) return false;
-    if(options.undo===false)dismissRandomUndo();
-    else{
-      randomUndo = { projects: snapshot }; clearTimeout(undoTimer);
-      undoTimer = window.setTimeout(() => dismissRandomUndo(), 30000);
-    }
-    updateText(); return true;
   }
   function dismissRandomUndo() { clearTimeout(undoTimer); undoTimer = null; randomUndo = null; updateText(); }
   function undoRandomize() {
     if (!randomUndo || !connected || !storageHealthy || pendingSave || colorDrag) return false;
-    if (!commit({ ...config, projects: randomUndo.projects })) return false;
-    dismissRandomUndo(); return true;
+    if (!durable && randomUndo.projects) { const saved = commit({ ...config, projects: randomUndo.projects }, { type: 'undo-randomize' }); if (saved) dismissRandomUndo(); return saved; }
+    return requestOperation({ type: 'undo-randomize', batchId: randomUndo.batchId });
   }
-  function pause() { return commit({ ...config, paused: true }); }
-  function resume() { return commit({ ...config, paused: false }); }
+  function pause() { return commit({ ...config, paused: true }, { type: 'set-paused', paused: true }); }
+  function resume() { return commit({ ...config, paused: false }, { type: 'set-paused', paused: false }); }
   function clearColors() {
-    try { config = preferences.clear(); colorDrag=null;colorPreview=null;storageHealthy = true; error = ''; persist(); refresh(); dismissRandomUndo(); return true; }
+    try {
+      if (!durable) config = preferences.clear();
+      else config = preferences.save({ ...config, projects: {} });
+      colorDrag=null;colorPreview=null;storageHealthy = true; error = '';
+      if (durable) persist({ type: 'clear-colors' });
+      else dismissRandomUndo();
+      refresh(); return true;
+    }
     catch (e) { error = `清除失败：${e.message}`; updateText(); return false; }
   }
   function clearMark(element,attribute=mark) { element.removeAttribute(attribute);element.style.removeProperty('--ccld-custom-light');element.style.removeProperty('--ccld-custom-dark'); }
@@ -549,6 +588,55 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       if(!colorPaintCache.has(color)){if(colorPaintCache.size>=256)colorPaintCache.delete(colorPaintCache.keys().next().value);colorPaintCache.set(color,preferences.paint(color));}
       const paint=colorPaintCache.get(color);element.style.setProperty('--ccld-custom-light',paint.light);element.style.setProperty('--ccld-custom-dark',paint.dark);
     }else{element.style.removeProperty('--ccld-custom-light');element.style.removeProperty('--ccld-custom-dark');}
+  }
+  function refreshRecentCatalog() {
+    if (destroyed) return null;
+    if (recentCatalogRequest) { recentCatalogNeedsRefresh = true; return recentCatalogRequest; }
+    const bridge = window.electronBridge;
+    if (typeof bridge?.getInitialSidebarBootstrap !== 'function') return null;
+    const remaining = 2500 - (Date.now() - recentCatalogReadAt);
+    if (remaining > 0) {
+      if (recentCatalogRefreshTimer === null) recentCatalogRefreshTimer = window.setTimeout(() => {
+        recentCatalogRefreshTimer = null;
+        refreshRecentCatalog();
+      }, remaining);
+      return null;
+    }
+    recentCatalogReadAt = Date.now();
+    recentCatalogRequest = Promise.resolve().then(() => bridge.getInitialSidebarBootstrap()).then(bootstrap => {
+      const entries = bootstrap?.catalogEntries;
+      if (!Array.isArray(entries)) return;
+      recentCatalogEntries = entries.flatMap(entry => {
+        if (typeof entry?.threadId !== 'string' || entry.threadId.length === 0) return [];
+        return [{ threadId: entry.threadId, sourceKind: entry.sourceKind === 'chatgpt' || entry.sourceKind === 'vscode' ? entry.sourceKind : null }];
+      });
+      if (!destroyed) schedule();
+    }).catch(() => {}).finally(() => {
+      recentCatalogRequest = null;
+      if (recentCatalogNeedsRefresh && !destroyed) { recentCatalogNeedsRefresh = false; refreshRecentCatalog(); }
+    });
+    return recentCatalogRequest;
+  }
+  function syncRecentChatDots() {
+    const desired = new Set();
+    if (recentCatalogEntries) {
+      const records = adapter.recentConversationRecords();
+      for (const match of adapter.classifyRecentRows(records, recentCatalogEntries)) {
+        if (match.type !== 'chat') continue;
+        const trigger = match.row.querySelector('[data-thread-title-trigger="true"]');
+        if (trigger) desired.add(trigger);
+      }
+    }
+    for (const element of chatDotNodes) {
+      if (!desired.has(element) || !element.isConnected) {
+        element.removeAttribute('data-ccld-chat-dot');
+        chatDotNodes.delete(element);
+      }
+    }
+    for (const element of desired) {
+      if (element.getAttribute('data-ccld-chat-dot') !== 'true') element.setAttribute('data-ccld-chat-dot', 'true');
+      chatDotNodes.add(element);
+    }
   }
   function refresh() {
     if (destroyed) return;
@@ -571,6 +659,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       paintElement(element,color);
       ownedNodes.add(element);
     }
+    syncRecentChatDots();
     const menus = [...document.querySelectorAll('[role="menu"][aria-labelledby]')];
     for (const [section, events] of menuControllers) {
       const project = adapter.menuOwner(section.parentElement, current.projects);
@@ -616,20 +705,27 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
   }
   function schedule() { if (!destroyed && !frame) frame = requestAnimationFrame(() => { frame = 0; refresh(); }); }
   const observer = new MutationObserver(records => {
-    const relevant = `${adapter.selectors.project},${adapter.selectors.thread},[role="menu"],[${mark}],[data-ccld-owner="palette"],[data-app-navigation-rail="true"],button[aria-label="打开个人资料菜单"]`;
+    const relevant = `${adapter.selectors.project},${adapter.selectors.thread},${adapter.selectors.recentSection},${adapter.selectors.recentRow},[role="menu"],[${mark}],[data-ccld-owner="palette"],[data-app-navigation-rail="true"],button[aria-label="打开个人资料菜单"]`;
+    const isRecentTarget = target => {
+      const element = target?.nodeType === 1 ? target : target?.parentElement;
+      return Boolean(element?.closest?.(adapter.selectors.recentSection));
+    };
+    if (records.some(record => record.type !== 'attributes' && isRecentTarget(record.target))) refreshRecentCatalog();
     if (records.some(record => {
       if (record.type === 'attributes') return !record.target.closest(`[${owner}]`) && !record.attributeName.startsWith('data-ccld-');
       if (record.target.closest?.(`[${owner}]`)) return false;
+      if (record.type === 'characterData') return isRecentTarget(record.target);
+      if (isRecentTarget(record.target)) return true;
       if (record.target.closest?.(`${adapter.selectors.project},${adapter.selectors.thread},[role="menu"]`)) return true;
       return [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1 && !node.hasAttribute?.(owner) &&
         (node.matches(relevant) || node.querySelector(relevant)));
     })) schedule();
   });
-  observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: [
+  observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: [
     'data-app-action-sidebar-project-id', 'data-app-action-sidebar-project-label', 'data-app-action-sidebar-project-collapsed',
     'data-app-action-sidebar-thread-id', 'data-app-action-sidebar-thread-kind', 'data-app-action-sidebar-thread-host-id',
     'data-app-action-sidebar-thread-pinned', 'data-sidebar-project-container-id', 'data-sidebar-project-kind', 'aria-expanded', 'aria-labelledby',
-    'data-thread-title', 'data-thread-title-trigger',
+    'data-thread-title', 'data-thread-title-trigger', 'data-sidebar-cycle-item', 'aria-current', 'data-app-action-sidebar-section-heading',
     'data-app-navigation-rail', 'aria-label',
   ] });
   window.addEventListener('storage', event => {
@@ -645,10 +741,13 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     clearTimeout(undoTimer); undoTimer = null; randomUndo = null;
     clearTimeout(pendingCommand?.timer); pendingCommand = null;
     clearTimeout(pendingUI?.timer);pendingUI=null;
+    clearTimeout(recentCatalogRefreshTimer); recentCatalogRefreshTimer = null;
     for (const events of menuControllers.values()) events.abort();
     menuControllers.clear();
     for (const element of ownedNodes) clearMark(element);
     ownedNodes.clear();
+    for (const element of chatDotNodes) element.removeAttribute('data-ccld-chat-dot');
+    chatDotNodes.clear();
     for (const element of document.querySelectorAll(`[${owner}]`)) element.remove();
     style.remove();
     widget.remove(); panel?.remove();
@@ -658,21 +757,52 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     refresh, pause, resume, destroy, setColor, randomizeColors, undoRandomize, clearColors, setQuotaVisible, stopRequested: false,
     product: options.product ?? 'demo',
     getPreferences() { return preferences.validate(config); },
+    getProjectKeys() { return current.projects.map(project => project.key); },
     getUISettings(){return{...uiSettings};},
-    uiSettingsAck(token,value,ok,message=''){
+    uiSettingsAck(token,value,ok,message='',settings,version){
       if(token!==options.sessionToken||pendingUI?.revision!==value)return false;
-      clearTimeout(pendingUI.timer);pendingUI=null;uiError=ok?'':`显示设置保存失败：${message}`;updateText();return true;
+      clearTimeout(pendingUI.timer);pendingUI=null;
+      if(settings&&Number.isSafeInteger(version)&&version>=uiSettingsVersion){
+        uiSettingsVersion=version;uiSettings.showQuota=settings.showQuota;window.__codexProjectQuota?.setVisible(uiSettings.showQuota);
+      }
+      uiError=ok?'':`显示设置保存失败：${message}`;updateText();return true;
     },
     commandAck(token, id, ok, message = '') {
       if (token !== options.sessionToken || pendingCommand?.id !== id) return false;
       clearTimeout(pendingCommand.timer); pendingCommand = null;
       commandError = ok ? '' : `打开配色文件失败：${message}`; updateText(); return true;
     },
-    persistenceAck(token, value, ok, message = '') {
+    persistenceAck(token, value, ok, message = '', serverPreferences, version, sharedUndo) {
       if (token !== options.sessionToken || pendingSave?.revision !== value) return false;
+      const savedRequest = pendingSave;
       clearTimeout(pendingSave.timer); pendingSave = null;
       persistenceError = ok ? '' : `本机保存失败：${message}。当前更改可能在重开后丢失。`;
+      if (serverPreferences && Number.isSafeInteger(version) && (version > sharedStateVersion || (!ok && version === sharedStateVersion))) {
+        try { config = preferences.validate(serverPreferences); sharedStateVersion = version; colorDrag=null;colorPreview=null;refresh(); }
+        catch (e) { error = `同步配色失败：${e.message}`; }
+      }
+      if (sharedUndo !== undefined) syncRandomUndo(sharedUndo);
+      const deferred = deferredSharedState; deferredSharedState = null;
+      if (deferred && deferred.version > sharedStateVersion) this.applySharedState(options.sessionToken, deferred.preferences, deferred.version, deferred.randomUndo);
+      else if (savedRequest.operation?.type === 'undo-randomize' && ok) dismissRandomUndo();
       updateText(); return true;
+    },
+    applySharedState(token, serverPreferences, version, sharedUndo) {
+      if (token !== options.sessionToken || !Number.isSafeInteger(version) || version <= sharedStateVersion) return false;
+      if (pendingSave) {
+        if (!deferredSharedState || version > deferredSharedState.version) deferredSharedState = { preferences: serverPreferences, version, randomUndo: sharedUndo };
+        return true;
+      }
+      try { config = preferences.validate(serverPreferences); }
+      catch (e) { error = `同步配色失败：${e.message}`; updateText(); return false; }
+      sharedStateVersion = version; colorDrag=null;colorPreview=null;
+      if (sharedUndo !== undefined) syncRandomUndo(sharedUndo);
+      refresh(); updateText(); return true;
+    },
+    applySharedUISettings(token, settings, version) {
+      if (token !== options.sessionToken || !settings || typeof settings.showQuota !== 'boolean' ||
+          !Number.isSafeInteger(version) || version <= uiSettingsVersion) return false;
+      uiSettingsVersion=version;uiSettings.showQuota=settings.showQuota;window.__codexProjectQuota?.setVisible(settings.showQuota);uiError='';updateText();return true;
     },
     async flushPersistence() {
       const deadline = Date.now() + 8500;
@@ -680,10 +810,10 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       return !pendingSave && !persistenceError && !error;
     },
     async flushUISettings(){const deadline=Date.now()+8500;while(pendingUI&&!destroyed&&Date.now()<deadline)await new Promise(resolve=>window.setTimeout(resolve,50));return !pendingUI&&!uiError;},
-    heartbeat() { heartbeat = Date.now(); if (!connected) { connected = true; refresh(); } else mountControls(); return this.status(); },
+    heartbeat() { heartbeat = Date.now(); if (!recentCatalogEntries) refreshRecentCatalog(); if (!connected) { connected = true; refresh(); } else mountControls(); return this.status(); },
     status() { return { version: 1, connected, ready: current.ready, partial: current.partial, paused: config.paused, error: error || persistenceError, saving: Boolean(pendingSave), product: this.product,
       controlReady: !inlineControls || widget.isConnected, showQuota:uiSettings.showQuota, uiError,
       projectCount: current.projects.length, coloredCount: ownedNodes.size, refreshCount, destroyed }; },
   };
-  window[globalKey] = api; refresh(); return api.status();
+  window[globalKey] = api; refresh(); refreshRecentCatalog(); return api.status();
 }

@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
-import { discover, Session } from '../../demo/core/cdp.mjs';
+import { discoverAll, Session } from '../../demo/core/cdp.mjs';
 import { createAdapter } from '../../demo/core/adapter.mjs';
 import { createPreferences } from '../../demo/core/preferences.mjs';
 import { installRenderer } from '../../demo/core/renderer.mjs';
-const session=new Session((await discover(39222,undefined,{preferredURL:'app://-/index.html'})).webSocketDebuggerUrl);
+const session=new Session((await discoverAll(39222,'app://-/index.html'))[0].webSocketDebuggerUrl);
 await session.connect();
 try {
   const run=async(adapter,preferences,install)=>{

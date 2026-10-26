@@ -17,16 +17,26 @@ export function isMainTarget(target, targetURL = 'app://-/index.html') {
   } catch { return false; }
 }
 
-export async function discover(port = 39222, targetURL, { preferredURL = process.env.COLOR_LABELS_WINDOW_URL } = {}) {
+export async function discoverAll(port = 39222, targetURL) {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('调试端口须为 1024–65535 的整数');
   const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3000), redirect: 'error' });
   if (!response.ok) throw new Error('本机调试接口不可用');
   const list = await response.json();
   if (!Array.isArray(list)) throw new Error('端口返回内容不是调试窗口列表');
-  const targets = list.filter(target => isMainTarget(target, targetURL) && (!preferredURL || target.url === preferredURL));
+  const targets = list.filter(target => isMainTarget(target, targetURL));
+  const seen = new Set();
+  for (const target of targets) {
+    if (typeof target.id !== 'string' || !target.id || seen.has(target.id)) throw new Error('主窗口身份无效或重复');
+    seen.add(target.id);
+    const socket = validateEndpoint(target.webSocketDebuggerUrl, 'ws:');
+    if (Number(socket.port) !== port || !socket.pathname.startsWith('/devtools/page/')) throw new Error('调试接口返回了不匹配的连接地址');
+  }
+  return targets;
+}
+
+export async function discover(port = 39222, targetURL, { preferredURL = process.env.COLOR_LABELS_WINDOW_URL } = {}) {
+  const targets = (await discoverAll(port, targetURL)).filter(target => !preferredURL || target.url === preferredURL);
   if (targets.length !== 1) throw new Error(targets.length ? '检测到多个主窗口，首版只支持单主窗口' : '未找到受支持的应用主窗口');
-  const socket = validateEndpoint(targets[0].webSocketDebuggerUrl, 'ws:');
-  if (Number(socket.port) !== port || !socket.pathname.startsWith('/devtools/page/')) throw new Error('调试接口返回了不匹配的连接地址');
   return targets[0];
 }
 
@@ -63,17 +73,17 @@ export class Session {
       this.socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('调试连接失败')); }, { once: true });
     });
   }
-  request(method, params = {}) {
+  request(method, params = {}, timeoutMs = 5000) {
     if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error('未连接到应用'));
     const id = ++this.serial;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('调试请求超时')); }, 5000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('调试请求超时')); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }
-  async expression(expression) {
-    const value = await this.request('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+  async expression(expression, timeoutMs = 5000) {
+    const value = await this.request('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, timeoutMs);
     return value.result.value;
   }
   evaluate(fn, ...args) { return this.expression(`(${fn.toString()})(${args.map(a => JSON.stringify(a)).join(',')})`); }
