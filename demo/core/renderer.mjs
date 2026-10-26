@@ -33,7 +33,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
   let fixedPalette, customToggle, customRegion;
   let projectTrigger, projectTriggerLabel, projectList, randomUndo = null, undoTimer = null;
   const colorPaintCache = new Map();
-  const chatDotNodes = new Set();
+  const chatMarkerNodes = new Set();
   let recentCatalogEntries = null, recentCatalogRequest = null, recentCatalogReadAt = 0, recentCatalogRefreshTimer = null, recentCatalogNeedsRefresh = false;
   let destroyed = false, frame = 0, heartbeat = Date.now(), refreshCount = 0;
   let current = adapter.inventory();
@@ -84,16 +84,16 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       box-shadow: none;
       pointer-events: none;
     }
-    [data-ccld-chat-dot="true"] { position: relative; }
-    [data-ccld-chat-dot="true"]::before {
+    [data-ccld-chat-marker="true"] { position: relative; }
+    [data-ccld-chat-marker="true"]::before {
       content: "";
       position: absolute;
       inset-inline-start: -6px;
       top: 50%;
       transform: translateY(-50%);
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
+      width: 4px;
+      height: 12px;
+      border-radius: 999px;
       background-color: var(--color-text-secondary, #888);
       pointer-events: none;
     }
@@ -593,7 +593,9 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     if (destroyed) return null;
     if (recentCatalogRequest) { recentCatalogNeedsRefresh = true; return recentCatalogRequest; }
     const bridge = window.electronBridge;
-    if (typeof bridge?.getInitialSidebarBootstrap !== 'function') return null;
+    const canReadBootstrap = typeof bridge?.getInitialSidebarBootstrap === 'function';
+    const records = adapter.recentConversationRecords();
+    if (!canReadBootstrap && !records.some(record => typeof record.conversationId === 'string')) return null;
     const remaining = 2500 - (Date.now() - recentCatalogReadAt);
     if (remaining > 0) {
       if (recentCatalogRefreshTimer === null) recentCatalogRefreshTimer = window.setTimeout(() => {
@@ -603,14 +605,32 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       return null;
     }
     recentCatalogReadAt = Date.now();
-    recentCatalogRequest = Promise.resolve().then(() => bridge.getInitialSidebarBootstrap()).then(bootstrap => {
-      const entries = bootstrap?.catalogEntries;
-      if (!Array.isArray(entries)) return;
-      recentCatalogEntries = entries.flatMap(entry => {
-        if (typeof entry?.threadId !== 'string' || entry.threadId.length === 0) return [];
-        return [{ threadId: entry.threadId, sourceKind: entry.sourceKind === 'chatgpt' || entry.sourceKind === 'vscode' ? entry.sourceKind : null }];
-      });
-      if (!destroyed) schedule();
+    const bootstrapRead = canReadBootstrap
+      ? Promise.resolve().then(() => bridge.getInitialSidebarBootstrap())
+      : Promise.resolve(null);
+    const pointRead = typeof adapter.readRecentCatalogEntries === 'function'
+      ? Promise.resolve().then(() => adapter.readRecentCatalogEntries(records))
+      : Promise.resolve(null);
+    recentCatalogRequest = Promise.allSettled([bootstrapRead, pointRead]).then(([bootstrapResult, pointResult]) => {
+      const bootstrapEntries = bootstrapResult.status === 'fulfilled' && Array.isArray(bootstrapResult.value?.catalogEntries)
+        ? bootstrapResult.value.catalogEntries.flatMap(entry => {
+          if (typeof entry?.threadId !== 'string' || entry.threadId.length === 0) return [];
+          return [{ threadId: entry.threadId, sourceKind: entry.sourceKind === 'chatgpt' || entry.sourceKind === 'vscode' ? entry.sourceKind : null }];
+        })
+        : null;
+      const pointEntries = pointResult.status === 'fulfilled' && Array.isArray(pointResult.value)
+        ? pointResult.value
+        : null;
+      if (bootstrapEntries === null && pointEntries === null) return;
+      const pointIds = new Set((pointEntries ?? []).map(entry => entry.threadId));
+      recentCatalogEntries = [
+        ...(bootstrapEntries ?? []).filter(entry => !pointIds.has(entry.threadId)),
+        ...(pointEntries ?? []),
+      ];
+      if (!destroyed) {
+        syncRecentChatDots();
+        schedule();
+      }
     }).catch(() => {}).finally(() => {
       recentCatalogRequest = null;
       if (recentCatalogNeedsRefresh && !destroyed) { recentCatalogNeedsRefresh = false; refreshRecentCatalog(); }
@@ -627,15 +647,15 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
         if (trigger) desired.add(trigger);
       }
     }
-    for (const element of chatDotNodes) {
+    for (const element of chatMarkerNodes) {
       if (!desired.has(element) || !element.isConnected) {
-        element.removeAttribute('data-ccld-chat-dot');
-        chatDotNodes.delete(element);
+        element.removeAttribute('data-ccld-chat-marker');
+        chatMarkerNodes.delete(element);
       }
     }
     for (const element of desired) {
-      if (element.getAttribute('data-ccld-chat-dot') !== 'true') element.setAttribute('data-ccld-chat-dot', 'true');
-      chatDotNodes.add(element);
+      if (element.getAttribute('data-ccld-chat-marker') !== 'true') element.setAttribute('data-ccld-chat-marker', 'true');
+      chatMarkerNodes.add(element);
     }
   }
   function refresh() {
@@ -710,7 +730,16 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
       const element = target?.nodeType === 1 ? target : target?.parentElement;
       return Boolean(element?.closest?.(adapter.selectors.recentSection));
     };
-    if (records.some(record => record.type !== 'attributes' && isRecentTarget(record.target))) refreshRecentCatalog();
+    const recentRowSelectors = `${adapter.selectors.recentSection},${adapter.selectors.recentRow}`;
+    const containsRecentRows = node => node?.nodeType === 1 && !node.hasAttribute?.(owner) &&
+      (node.matches?.(recentRowSelectors) || node.querySelector?.(recentRowSelectors));
+    const recentListChanged = records.some(record => {
+      if (record.type === 'attributes') {
+        return ['data-sidebar-cycle-item', 'aria-current', 'data-app-action-sidebar-section-heading'].includes(record.attributeName) && isRecentTarget(record.target);
+      }
+      return isRecentTarget(record.target) || [...record.addedNodes, ...record.removedNodes].some(containsRecentRows);
+    });
+    if (recentListChanged) refreshRecentCatalog();
     if (records.some(record => {
       if (record.type === 'attributes') return !record.target.closest(`[${owner}]`) && !record.attributeName.startsWith('data-ccld-');
       if (record.target.closest?.(`[${owner}]`)) return false;
@@ -746,8 +775,8 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
     menuControllers.clear();
     for (const element of ownedNodes) clearMark(element);
     ownedNodes.clear();
-    for (const element of chatDotNodes) element.removeAttribute('data-ccld-chat-dot');
-    chatDotNodes.clear();
+    for (const element of chatMarkerNodes) element.removeAttribute('data-ccld-chat-marker');
+    chatMarkerNodes.clear();
     for (const element of document.querySelectorAll(`[${owner}]`)) element.remove();
     style.remove();
     widget.remove(); panel?.remove();

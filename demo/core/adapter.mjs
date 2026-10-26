@@ -96,12 +96,35 @@ export function createAdapter(doc) {
             const conversationId = props?.conversationId;
             const conversation = props?.conversation;
             if (typeof conversationId === 'string' && conversationId.length > 0 && conversation && typeof conversation === 'object') {
+              let chatgptSidebar = false;
+              // In the current client, server-backed ChatGPT sidebar rows pass
+              // through the `tnr` renderer. Require that renderer's own
+              // conversation ID and complete ordinary-Chat metadata; if this
+              // internal component shape changes, this evidence fails closed.
+              for (let sourceFiber = fiber, sourceDepth = 0; sourceFiber && sourceDepth < 24; sourceFiber = sourceFiber.return, sourceDepth++) {
+                try {
+                  const sourceName = typeof sourceFiber.type === 'function'
+                    ? sourceFiber.type.displayName || sourceFiber.type.name
+                    : '';
+                  if (sourceName !== 'tnr') continue;
+                  const sourceProps = sourceFiber.memoizedProps ?? sourceFiber.pendingProps;
+                  const sourceConversation = sourceProps?.conversation;
+                  chatgptSidebar = sourceProps?.variant === 'sidebar' &&
+                    sourceConversation?.id === conversationId &&
+                    sourceConversation.conversation_origin === null &&
+                    sourceConversation.trial_conversation_type === null &&
+                    sourceConversation.is_temporary_chat === false &&
+                    sourceConversation.is_automation_conversation === false;
+                  if (chatgptSidebar) break;
+                } catch { /* An inaccessible React node is not source evidence. */ }
+              }
               return {
                 conversationId,
                 trialConversationType: conversation.trial_conversation_type,
                 conversationOrigin: conversation.conversation_origin,
                 temporary: conversation.is_temporary_chat,
                 automation: conversation.is_automation_conversation,
+                chatgptSidebar,
               };
             }
           } catch { /* Unknown client props must not interrupt the existing renderer. */ }
@@ -124,12 +147,14 @@ export function createAdapter(doc) {
       const id = record?.conversationId;
       if (typeof id !== 'string' || duplicates.has(id)) continue;
       const entry = byId.get(id);
-      if (!entry) continue;
-      if (entry.sourceKind === 'chatgpt' && record.trialConversationType === null &&
+      if (entry?.sourceKind === 'vscode') {
+        result.push({ row: record.row, type: 'work' });
+        continue;
+      }
+      const verifiedChatSource = entry?.sourceKind === 'chatgpt' || (!entry && record.chatgptSidebar === true);
+      if (verifiedChatSource && record.trialConversationType === null &&
           record.conversationOrigin === null && record.temporary === false && record.automation === false) {
         result.push({ row: record.row, type: 'chat' });
-      } else if (entry.sourceKind === 'vscode') {
-        result.push({ row: record.row, type: 'work' });
       }
     }
     return result;
@@ -140,5 +165,60 @@ export function createAdapter(doc) {
       return identity ? { row, ...identity } : { row };
     });
   }
-  return { selectors, inventory, menuOwner, controlAnchor, recentRows, conversationIdentity, classifyRecentRows, recentConversationRecords };
+  function findRecentCatalogPager(records) {
+    const row = records.find(record => typeof record?.conversationId === 'string' && record.row)?.row;
+    for (let element = row, depth = 0; element && depth < 14; element = element.parentElement, depth++) {
+      let keys;
+      try { keys = Object.getOwnPropertyNames(element); } catch { continue; }
+      for (const key of keys) {
+        if (!key.startsWith('__reactFiber$')) continue;
+        let fiber;
+        try { fiber = element[key]; } catch { continue; }
+        for (let step = 0; fiber && step < 140; step++, fiber = fiber.return) {
+          for (let hook = fiber.memoizedState, count = 0; hook && count < 180; hook = hook.next, count++) {
+            try {
+              const service = hook.memoizedState;
+              if (service && Array.isArray(service.hostIds) &&
+                  typeof service.readEntries === 'function' && typeof service.getPageState === 'function' &&
+                  typeof service.ensurePage === 'function' && typeof service.loadMore === 'function') return service;
+            } catch { /* Unknown client hooks are ignored. */ }
+          }
+        }
+      }
+    }
+    return null;
+  }
+  async function readRecentCatalogEntries(records) {
+    const ids = [...new Set((Array.isArray(records) ? records : [])
+      .map(record => record?.conversationId)
+      .filter(id => typeof id === 'string' && id.length > 0))];
+    if (ids.length === 0) return null;
+    const pager = findRecentCatalogPager(records);
+    if (!pager || !Array.isArray(pager.hostIds) || pager.hostIds.length === 0 || pager.hostIds.length > 8) return null;
+    const hostIds = pager.hostIds.filter(hostId => typeof hostId === 'string' && hostId.length > 0 && hostId.length <= 256);
+    if (hostIds.length === 0) return null;
+    const result = [];
+    let readSucceeded = false;
+    for (const hostId of hostIds) {
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const batch = ids.slice(offset, offset + 100);
+        const batchIds = new Set(batch);
+        let entries;
+        try {
+          entries = await pager.readEntries(batch.map(threadId => ({ hostId, threadId })));
+          readSucceeded = true;
+        } catch { continue; }
+        if (!Array.isArray(entries)) continue;
+        for (const entry of entries) {
+          if (typeof entry?.threadId !== 'string' || !batchIds.has(entry.threadId)) continue;
+          result.push({
+            threadId: entry.threadId,
+            sourceKind: entry.sourceKind === 'chatgpt' || entry.sourceKind === 'vscode' ? entry.sourceKind : null,
+          });
+        }
+      }
+    }
+    return readSucceeded ? result : null;
+  }
+  return { selectors, inventory, menuOwner, controlAnchor, recentRows, conversationIdentity, classifyRecentRows, recentConversationRecords, readRecentCatalogEntries };
 }

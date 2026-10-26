@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { discoverAll, Session } from '../demo/core/cdp.mjs';
 import { createAdapter } from '../demo/core/adapter.mjs';
 
@@ -23,30 +24,47 @@ for (const target of targets) {
       const cardAboveProfile = Boolean(anchor && card?.parentElement === anchor.rail && card.nextElementSibling === anchor.footer);
       const cardVisible = Boolean(cardRect?.width > 0 && cardRect?.height > 0);
       let chatRows = 0, workRows = 0;
+      let unknownRows = 0;
       const bridge = window.electronBridge;
+      const adapter = (0, eval)(`(${adapterFactorySource})`)(document);
+      const records = adapter.recentConversationRecords();
+      let entries = [];
       if (typeof bridge?.getInitialSidebarBootstrap === 'function') {
         try {
           const catalog = await bridge.getInitialSidebarBootstrap();
-          const entries = Array.isArray(catalog?.catalogEntries) ? catalog.catalogEntries : [];
-          const adapter = (0, eval)(`(${adapterFactorySource})`)(document);
-          const classified = adapter.classifyRecentRows(adapter.recentConversationRecords(), entries);
-          chatRows = classified.filter(item => item.type === 'chat').length;
-          workRows = classified.filter(item => item.type === 'work').length;
+          entries = Array.isArray(catalog?.catalogEntries) ? catalog.catalogEntries : [];
         } catch {}
       }
-      const dots = [...document.querySelectorAll('[data-ccld-chat-dot="true"]')];
-      const chatDotsVisible = dots.every(node => {
+      try {
+        const pointEntries = await adapter.readRecentCatalogEntries(records);
+        if (Array.isArray(pointEntries) && pointEntries.length > 0) {
+          const pointIds = new Set(pointEntries.map(entry => entry.threadId));
+          entries = [...entries.filter(entry => !pointIds.has(entry.threadId)), ...pointEntries];
+        }
+      } catch {}
+      const classified = adapter.classifyRecentRows(records, entries);
+      chatRows = classified.filter(item => item.type === 'chat').length;
+      workRows = classified.filter(item => item.type === 'work').length;
+      unknownRows = records.length - chatRows - workRows;
+      const markers = [...document.querySelectorAll('[data-ccld-chat-marker="true"]')];
+      const expectedChatMarkers = new Set(classified.filter(item => item.type === 'chat')
+        .map(item => item.row.querySelector('[data-thread-title-trigger="true"]')).filter(Boolean));
+      const chatMarkersMatchRows = markers.length === expectedChatMarkers.size && markers.every(node => expectedChatMarkers.has(node));
+      const localWorkRows = [...document.querySelectorAll('[data-app-action-sidebar-thread-row][data-app-action-sidebar-thread-host-id="local"]')];
+      const workRowsMarked = localWorkRows.filter(row => row.hasAttribute('data-ccld-chat-marker') || row.querySelector('[data-ccld-chat-marker="true"]')).length;
+      const chatMarkersVisible = markers.every(node => {
         const style = getComputedStyle(node, '::before');
-        return style.content !== 'none' && style.width === '5px' && style.height === '5px' &&
-          style.borderRadius === '50%' && style.backgroundColor !== 'rgba(0, 0, 0, 0)';
+        return style.content !== 'none' && style.width === '4px' && style.height === '12px' &&
+          style.borderRadius !== '0px' && style.backgroundColor !== 'rgba(0, 0, 0, 0)';
       });
       return {
         connected: state.connected === true, ready: state.ready === true, paused: state.paused === true,
         showQuota: state.showQuota === true, projectCount: projectKeys.length,
         coloredCount: projectKeys.filter(key => preferenceMap[key]).length,
         controlsInSharedCard, cardAboveProfile, cardVisible,
-        chatDots: dots.length, chatDotsVisible,
-        chatRows, workRows, quotaMounted: quota?.status().mounted === true,
+        chatMarkers: markers.length, chatMarkersVisible, chatMarkersMatchRows,
+        localWorkRows: localWorkRows.length, workRowsMarked,
+        chatRows, workRows, unknownRows, quotaMounted: quota?.status().mounted === true,
         quotaVisible: quota?.status().visible === true,
         quotaVisibilityMatchesSetting: quota?.status().visible === state.showQuota,
         // Keep project keys only in this process long enough to compare windows;
@@ -59,13 +77,14 @@ for (const target of targets) {
 const maps = results.map(result => JSON.stringify(result._colors ?? {}));
 const windows = results.map(({ _colors, ...summary }) => summary);
 const report = {
-  passed: results.length >= 2 && results.every(result => result.connected && result.ready && result.quotaMounted && result.quotaVisibilityMatchesSetting && result.controlsInSharedCard && result.cardAboveProfile && result.cardVisible && result.chatDotsVisible && result.chatDots === result.chatRows) && maps.every(value => value === maps[0]),
+  passed: results.length >= 2 && results.every(result => result.connected && result.ready && result.quotaMounted && result.quotaVisibilityMatchesSetting && result.controlsInSharedCard && result.cardAboveProfile && result.cardVisible && result.chatMarkersVisible && result.chatMarkers === result.chatRows && result.chatMarkersMatchRows && result.workRowsMarked === 0) && maps.every(value => value === maps[0]),
   mainWindowCount: targets.length,
   distinctWindowIdentities: new Set(targets.map(target => target.id)).size === targets.length,
   sharedColorMaps: maps.every(value => value === maps[0]),
   windows,
   scope: '仅读取官方主窗口内的插件状态、项目键计数和会话类型计数；不读取标题或正文，不写配色。',
 };
-await fs.writeFile(new URL('./multi-window-live.json', import.meta.url), JSON.stringify(report, null, 2) + '\n');
+const reportPath = process.argv[2] ? path.resolve(process.argv[2]) : new URL('./multi-window-live.json', import.meta.url);
+await fs.writeFile(reportPath, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify(report, null, 2));
 if (!report.passed) process.exitCode = 1;

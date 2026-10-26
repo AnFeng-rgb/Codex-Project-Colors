@@ -43,6 +43,30 @@ test('目录 ID 重复或无法对应时不猜测类型', () => {
   assert.deepEqual(adapter.classifyRecentRows(records, entries), []);
 });
 
+test('精确的 ChatGPT 服务器侧栏来源可补齐未进入目录缓存的旧 Chat', () => {
+  const row = {};
+  const record = {
+    row, conversationId: 'older-chat', chatgptSidebar: true,
+    trialConversationType: null, conversationOrigin: null, temporary: false, automation: false,
+  };
+  assert.deepEqual(adapter.classifyRecentRows([record], []), [{ row, type: 'chat' }]);
+});
+
+test('缺失来源、冲突来源、重复 ID 或特殊类型仍不标记', () => {
+  const records = [
+    { row: {}, conversationId: 'unknown', chatgptSidebar: false, trialConversationType: null, conversationOrigin: null, temporary: false, automation: false },
+    { row: {}, conversationId: 'untrusted', chatgptSidebar: true, trialConversationType: null, conversationOrigin: null, temporary: false, automation: false },
+    { row: {}, conversationId: 'duplicate', chatgptSidebar: true, trialConversationType: null, conversationOrigin: null, temporary: false, automation: false },
+    { row: {}, conversationId: 'special', chatgptSidebar: true, trialConversationType: 'work', conversationOrigin: null, temporary: false, automation: false },
+  ];
+  const entries = [
+    { threadId: 'untrusted', sourceKind: null },
+    { threadId: 'duplicate', sourceKind: 'chatgpt' },
+    { threadId: 'duplicate', sourceKind: 'vscode' },
+  ];
+  assert.deepEqual(adapter.classifyRecentRows(records, entries), []);
+});
+
 test('从 React 行属性只提取会话标识及分类字段，不读取标题', () => {
   const conversation = {
     trial_conversation_type: null,
@@ -51,14 +75,42 @@ test('从 React 行属性只提取会话标识及分类字段，不读取标题'
     is_automation_conversation: false,
     get title() { throw new Error('标题不应读取'); },
   };
-  const row = { __reactFiber$sample: { memoizedProps: { conversationId: 'private-id', conversation }, return: null } };
+  const sourceConversation = {
+    id: 'private-id', conversation_origin: null, trial_conversation_type: null,
+    is_temporary_chat: false, is_automation_conversation: false,
+  };
+  function tnr() {}
+  function nnr() {}
+  const sourceFiber = { type: tnr, memoizedProps: { variant: 'sidebar', conversation: sourceConversation }, return: null };
+  const row = { __reactFiber$sample: { type: nnr, memoizedProps: { conversationId: 'private-id', conversation }, return: sourceFiber } };
   assert.deepEqual(adapter.conversationIdentity(row), {
     conversationId: 'private-id',
     trialConversationType: null,
     conversationOrigin: null,
     temporary: false,
     automation: false,
+    chatgptSidebar: true,
   });
+});
+
+test('按当前最近列表 ID 只读查询目录来源，且不读取目录标题', async () => {
+  const calls = [];
+  const pager = {
+    hostIds: ['local', 'chatgpt:test'],
+    readEntries: async request => {
+      calls.push(request);
+      return request.filter(item => item.hostId === 'chatgpt:test').map(item => ({
+        threadId: item.threadId, sourceKind: 'chatgpt',
+        get displayTitle() { throw new Error('标题不应读取'); },
+      }));
+    },
+    getPageState() {}, ensurePage() {}, loadMore() {},
+  };
+  const row = { __reactFiber$sample: { memoizedState: { memoizedState: pager, next: null }, return: null } };
+  const entries = await adapter.readRecentCatalogEntries([{ row, conversationId: 'chat-id' }]);
+  assert.deepEqual(entries, [{ threadId: 'chat-id', sourceKind: 'chatgpt' }]);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(batch => batch[0].hostId), ['local', 'chatgpt:test']);
 });
 
 test('重复的隐藏最近列表不阻断唯一可见列表；两个可见列表时保持未知', () => {
