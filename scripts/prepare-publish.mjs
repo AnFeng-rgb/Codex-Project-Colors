@@ -28,6 +28,8 @@ for (const directory of ['src', 'demo/core']) {
 }
 for (const file of ['assets/app-icon/AppIcon.png', 'assets/app-icon/README.md', 'src/macos/Manager.m', 'src/macos/StartupBridge.m', 'src/macos/build-icon.mjs', 'src/macos/build.mjs', 'src/macos/fetch-runtime.mjs', 'src/macos/sign-release.mjs', 'src/macos/node.entitlements.plist', 'src/startup/controller.mjs', 'src/startup/watch.mjs', 'third-party/codex-usage-badge-LICENSE', 'demo/platforms/macos/launch.mjs']) await copy(path.join(root, file), path.join(source, file));
 for (const file of ['sidebar-browser.mjs', 'wheel-browser.mjs', 'randomize-browser.mjs', 'first-use-browser.mjs']) await copy(path.join(root, 'verification/release', file), path.join(source, 'verification/release', file));
+// The shipped source tests import the pure Chat marker acceptance predicate.
+await copy(path.join(root, 'verification/chat-marker-acceptance.mjs'), path.join(source, 'verification/chat-marker-acceptance.mjs'));
 await fs.writeFile(path.join(source, 'package.json'), JSON.stringify({
   name: 'codex-project-colors', version, private: true, type: 'module', license: 'MIT', engines: { node: '>=24' },
   scripts: { test: 'node --test src/*.test.mjs demo/core/*.test.mjs', 'test:quota-ui':'node verification/quota/browser.mjs', 'build:macos': 'node src/macos/build.mjs' },

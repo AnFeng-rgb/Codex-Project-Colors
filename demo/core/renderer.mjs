@@ -622,11 +622,7 @@ export function installRenderer(createAdapter, createPreferences, options = {}, 
         ? pointResult.value
         : null;
       if (bootstrapEntries === null && pointEntries === null) return;
-      const pointIds = new Set((pointEntries ?? []).map(entry => entry.threadId));
-      recentCatalogEntries = [
-        ...(bootstrapEntries ?? []).filter(entry => !pointIds.has(entry.threadId)),
-        ...(pointEntries ?? []),
-      ];
+      recentCatalogEntries = adapter.mergeRecentCatalogEntries(bootstrapEntries, pointEntries);
       if (!destroyed) {
         syncRecentChatDots();
         schedule();

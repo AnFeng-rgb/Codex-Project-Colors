@@ -97,6 +97,28 @@ export function createAdapter(doc) {
             const conversation = props?.conversation;
             if (typeof conversationId === 'string' && conversationId.length > 0 && conversation && typeof conversation === 'object') {
               let chatgptSidebar = false;
+              // Newer clients omit is_automation_conversation on sidebar
+              // objects. Accept a narrowly scoped ordinary-Chat shape only
+              // when the official ChatGPT row key matches this conversation,
+              // the row has no other special/active-chat metadata, and the
+              // sidebar's own cloud-automation indicator is explicitly false.
+              // A missing/changed indicator or conflicting data fails closed.
+              const sidebarContainer = row.closest?.('[data-sidebar-chatgpt-conversation-key]');
+              const newSidebarOrdinaryChat =
+                sidebarContainer?.getAttribute?.('data-sidebar-chatgpt-conversation-key') === `chatgpt:conversation:${conversationId}` &&
+                props?.conversationId === conversationId && conversation.id === conversationId &&
+                props?.variant === 'sidebar' && props?.hasCloudAutomation === false &&
+                conversation.is_automation_conversation === undefined &&
+                conversation.conversation_origin === null &&
+                conversation.trial_conversation_type === null &&
+                conversation.is_temporary_chat === false &&
+                conversation.is_do_not_remember === false &&
+                conversation.gizmo_id === null &&
+                conversation.workspace_id === null &&
+                conversation.conversation_template_id === null &&
+                conversation.sugar_item_id === null &&
+                // Async status describes a running turn, not conversation type.
+                (conversation.async_status === null || Number.isInteger(conversation.async_status));
               // In the current client, server-backed ChatGPT sidebar rows pass
               // through the `tnr` renderer. Require that renderer's own
               // conversation ID and complete ordinary-Chat metadata; if this
@@ -125,6 +147,7 @@ export function createAdapter(doc) {
                 temporary: conversation.is_temporary_chat,
                 automation: conversation.is_automation_conversation,
                 chatgptSidebar,
+                newSidebarOrdinaryChat,
               };
             }
           } catch { /* Unknown client props must not interrupt the existing renderer. */ }
@@ -132,6 +155,32 @@ export function createAdapter(doc) {
       }
     }
     return null;
+  }
+  function mergeRecentCatalogEntries(bootstrapEntries, pointEntries) {
+    // Keep conflicting sources for the same thread so classification fails closed.
+    // Deduplicate only matching snapshots, preserving duplicates inside either
+    // snapshot (which also cause classification to fail closed).
+    const initial = Array.isArray(bootstrapEntries) ? bootstrapEntries : [];
+    const current = Array.isArray(pointEntries) ? pointEntries : [];
+    const currentCounts = new Map();
+    for (const entry of current) {
+      if (typeof entry?.threadId !== 'string' || !entry.threadId) continue;
+      const bySource = currentCounts.get(entry.threadId) ?? new Map();
+      bySource.set(entry.sourceKind, (bySource.get(entry.sourceKind) ?? 0) + 1);
+      currentCounts.set(entry.threadId, bySource);
+    }
+    const retained = [];
+    const used = new Map();
+    for (const entry of initial) {
+      if (typeof entry?.threadId !== 'string' || !entry.threadId) continue;
+      const sameSourceCurrent = currentCounts.get(entry.threadId)?.get(entry.sourceKind) ?? 0;
+      const bySource = used.get(entry.threadId) ?? new Map();
+      const n = (bySource.get(entry.sourceKind) ?? 0) + 1;
+      bySource.set(entry.sourceKind, n);
+      used.set(entry.threadId, bySource);
+      if (n > sameSourceCurrent) retained.push(entry);
+    }
+    return [...retained, ...current];
   }
   function classifyRecentRows(rows, catalogEntries) {
     if (!Array.isArray(rows) || !Array.isArray(catalogEntries)) return [];
@@ -152,8 +201,10 @@ export function createAdapter(doc) {
         continue;
       }
       const verifiedChatSource = entry?.sourceKind === 'chatgpt' || (!entry && record.chatgptSidebar === true);
+      const supportedOrdinaryMetadata = record.automation === false ||
+        (entry?.sourceKind === 'chatgpt' && record.automation === undefined && record.newSidebarOrdinaryChat === true);
       if (verifiedChatSource && record.trialConversationType === null &&
-          record.conversationOrigin === null && record.temporary === false && record.automation === false) {
+          record.conversationOrigin === null && record.temporary === false && supportedOrdinaryMetadata) {
         result.push({ row: record.row, type: 'chat' });
       }
     }
@@ -220,5 +271,5 @@ export function createAdapter(doc) {
     }
     return readSucceeded ? result : null;
   }
-  return { selectors, inventory, menuOwner, controlAnchor, recentRows, conversationIdentity, classifyRecentRows, recentConversationRecords, readRecentCatalogEntries };
+  return { selectors, inventory, menuOwner, controlAnchor, recentRows, conversationIdentity, mergeRecentCatalogEntries, classifyRecentRows, recentConversationRecords, readRecentCatalogEntries };
 }

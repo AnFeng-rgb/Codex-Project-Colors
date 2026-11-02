@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { discoverAll, Session } from '../demo/core/cdp.mjs';
 import { createAdapter } from '../demo/core/adapter.mjs';
+import { assessChatMarkerLive } from './chat-marker-acceptance.mjs';
 
 const targets = await discoverAll(39222, 'app://-/index.html');
 const results = [];
@@ -37,10 +38,7 @@ for (const target of targets) {
       }
       try {
         const pointEntries = await adapter.readRecentCatalogEntries(records);
-        if (Array.isArray(pointEntries) && pointEntries.length > 0) {
-          const pointIds = new Set(pointEntries.map(entry => entry.threadId));
-          entries = [...entries.filter(entry => !pointIds.has(entry.threadId)), ...pointEntries];
-        }
+        entries = adapter.mergeRecentCatalogEntries(entries, pointEntries);
       } catch {}
       const classified = adapter.classifyRecentRows(records, entries);
       chatRows = classified.filter(item => item.type === 'chat').length;
@@ -77,7 +75,7 @@ for (const target of targets) {
 const maps = results.map(result => JSON.stringify(result._colors ?? {}));
 const windows = results.map(({ _colors, ...summary }) => summary);
 const report = {
-  passed: results.length >= 2 && results.every(result => result.connected && result.ready && result.quotaMounted && result.quotaVisibilityMatchesSetting && result.controlsInSharedCard && result.cardAboveProfile && result.cardVisible && result.chatMarkersVisible && result.chatMarkers === result.chatRows && result.chatMarkersMatchRows && result.workRowsMarked === 0) && maps.every(value => value === maps[0]),
+  ...assessChatMarkerLive(results, maps),
   mainWindowCount: targets.length,
   distinctWindowIdentities: new Set(targets.map(target => target.id)).size === targets.length,
   sharedColorMaps: maps.every(value => value === maps[0]),

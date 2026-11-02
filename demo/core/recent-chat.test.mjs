@@ -1,8 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAdapter } from './adapter.mjs';
+import { assessChatMarkerLive } from '../../verification/chat-marker-acceptance.mjs';
 
 const adapter = createAdapter({ querySelectorAll: () => [] });
+
+test('相同来源去重，冲突来源与重复记录保持未知', () => {
+  const bootstrap = [
+    { threadId: 'same', sourceKind: 'chatgpt' },
+    { threadId: 'conflict', sourceKind: 'vscode' },
+    { threadId: 'repeat', sourceKind: 'chatgpt' },
+    { threadId: 'repeat', sourceKind: 'chatgpt' },
+  ];
+  const point = [
+    { threadId: 'same', sourceKind: 'chatgpt' },
+    { threadId: 'conflict', sourceKind: 'chatgpt' },
+    { threadId: 'repeat', sourceKind: 'chatgpt' },
+  ];
+  const merged = adapter.mergeRecentCatalogEntries(bootstrap, point);
+  assert.deepEqual(merged.filter(e => e.threadId === 'same').map(e => e.sourceKind), ['chatgpt']);
+  assert.deepEqual(merged.filter(e => e.threadId === 'conflict').map(e => e.sourceKind), ['vscode', 'chatgpt']);
+  assert.equal(merged.filter(e => e.threadId === 'repeat').length, 2);
+  const candidate = id => ({ row: {}, conversationId: id, trialConversationType: null,
+    conversationOrigin: null, temporary: false, automation: false });
+  assert.deepEqual(adapter.classifyRecentRows([candidate('conflict'), candidate('repeat')], merged), []);
+  assert.equal(adapter.classifyRecentRows([candidate('same')], merged).length, 1);
+});
+
+test('现场验收需要已识别 Chat 正例，零条不能通过', () => {
+  const good = { connected: true, ready: true, quotaMounted: true, quotaVisibilityMatchesSetting: true,
+    controlsInSharedCard: true, cardAboveProfile: true, cardVisible: true,
+    chatMarkersVisible: true, chatMarkersMatchRows: true, workRowsMarked: 0,
+    chatRows: 0, chatMarkers: 0 };
+  assert.deepEqual(assessChatMarkerLive([good, good], ['same', 'same']), {
+    passed: false, confirmedChatSampleCount: 0, chatPositiveCoverage: false,
+  });
+  const positive = { ...good, chatRows: 1, chatMarkers: 1 };
+  assert.equal(assessChatMarkerLive([positive, good], ['same', 'same']).passed, true);
+  assert.equal(assessChatMarkerLive([positive, good], ['same', 'different']).passed, false);
+  assert.equal(assessChatMarkerLive([positive, { ...good, workRowsMarked: 1 }], ['same', 'same']).passed, false);
+});
 
 test('只把来源唯一且普通 Chat 元数据完整的行识别为 Chat', () => {
   const chatRow = {};
@@ -90,7 +127,65 @@ test('从 React 行属性只提取会话标识及分类字段，不读取标题'
     temporary: false,
     automation: false,
     chatgptSidebar: true,
+    newSidebarOrdinaryChat: false,
   });
+});
+
+test('新版客户端可用精确侧栏归属及完整普通会话形态恢复标记', () => {
+  const base = {
+    id: 'chat-id', conversation_origin: null, trial_conversation_type: null,
+    is_temporary_chat: false, is_do_not_remember: false, gizmo_id: null,
+    workspace_id: null, conversation_template_id: null, sugar_item_id: null,
+    async_status: null,
+  };
+  const create = (overrides = {}, propsOverrides = {}, sidebarKey = 'chatgpt:conversation:chat-id') => {
+    const conversation = { ...base, ...overrides };
+    Object.defineProperty(conversation, 'title', { get() { throw Error('不允许读取会话标题'); } });
+    const row = {
+      closest: selector => selector === '[data-sidebar-chatgpt-conversation-key]'
+        ? { getAttribute: name => name === 'data-sidebar-chatgpt-conversation-key' ? sidebarKey : null }
+        : null,
+      __reactFiber$new: { memoizedProps: {
+        conversationId: 'chat-id', conversation, variant: 'sidebar', hasCloudAutomation: false,
+        ...propsOverrides,
+      }, return: null },
+    };
+    return { row, ...adapter.conversationIdentity(row) };
+  };
+  const match = record => adapter.classifyRecentRows([record], [
+    { threadId: 'chat-id', sourceKind: 'chatgpt' },
+  ]);
+  const ordinary = create();
+  assert.equal(ordinary.newSidebarOrdinaryChat, true);
+  assert.deepEqual(match(ordinary), [{ row: ordinary.row, type: 'chat' }]);
+  // A currently generating ordinary Chat may have a numeric async status.
+  assert.equal(match(create({ async_status: 1 })).length, 1);
+  const rejected = [
+    create({}, { hasCloudAutomation: true }),
+    create({}, { hasCloudAutomation: undefined }),
+    create({}, { variant: 'project' }),
+    create({}, {}, 'chatgpt:conversation:wrong-id'),
+    create({ conversation_origin: 'tpp' }),
+    create({ trial_conversation_type: 'work' }),
+    create({ is_temporary_chat: true }),
+    create({ is_do_not_remember: true }),
+    create({ gizmo_id: 'custom-gpt' }),
+    create({ workspace_id: 'team' }),
+    create({ conversation_template_id: 'template' }),
+    create({ sugar_item_id: 'special' }),
+    create({ async_status: 'invalid' }),
+    create({ is_automation_conversation: true }),
+  ];
+  for (const record of rejected) {
+    assert.equal(record.newSidebarOrdinaryChat, false);
+    assert.deepEqual(match(record), []);
+  }
+  assert.deepEqual(adapter.classifyRecentRows([ordinary], [
+    { threadId: 'chat-id', sourceKind: 'vscode' },
+  ]), [{ row: ordinary.row, type: 'work' }]);
+  assert.deepEqual(adapter.classifyRecentRows([ordinary], [
+    { threadId: 'chat-id', sourceKind: null },
+  ]), []);
 });
 
 test('按当前最近列表 ID 只读查询目录来源，且不读取目录标题', async () => {
